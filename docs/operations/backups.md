@@ -21,7 +21,26 @@ In `LIFE_OS_BACKUP_DIR` on the host (`~/life-os.backups`, mode 700), under `auto
 
 ## Retention
 
-The newest successful full backup of each of the last 7 days, 4 weeks, and 12 months that have one (`LIFE_OS_BACKUP_KEEP_DAILY`, `…_WEEKLY`, `…_MONTHLY`), about 20 runs covering a year. Failed runs are kept 3 days (`LIFE_OS_BACKUP_KEEP_FAILED_DAYS`), and runs of only some databases (manual ones, and the fresh dump `tools/restore-database` takes) 7 days. A capture image stays while a kept run lists it. The newest successful backup is never deleted.
+The newest successful full backup of each of the last 7 days, 4 weeks, and 12 months that have one (`LIFE_OS_BACKUP_KEEP_DAILY`, `…_WEEKLY`, `…_MONTHLY`), about 20 runs covering a year. Failed runs are kept 3 days (`LIFE_OS_BACKUP_KEEP_FAILED_DAYS`), and runs of only some databases (manual ones, and the fresh dump `tools/restore-database` takes) 7 days. A capture image stays while a kept run lists it. The newest successful backup is never deleted. A full manual run, such as **Back up now** or the backup `./setup.sh update` and `./setup.sh restore` take first, counts like a nightly one: as the newest of its day, it takes that day's place, and the rotation after it deletes the day's older backup.
+
+## Restoring everything
+
+`./setup.sh restore` puts the whole stack back as one full backup has it, on a clone of the repository as on a release install ([Backups and restore](../install/backups.md#restore) is the user's side):
+
+```sh
+./setup.sh restore list                  # the full backups that succeeded, newest first, in LIFE_OS_TIMEZONE
+./setup.sh restore 20261011T011500Z      # one of them; a day (2026-10-11) takes its newest, nothing the newest
+```
+
+It runs `tools/restore-database` for each database: the clone's `tools/`, or, on a release install, the copies of `tools/restore-database`, `tools/restore-media`, and the registry that the release's `setup.sh` carries (`tools/build-install-bundle` writes them in). In order, it:
+
+1. picks the run and checks every dump against the manifest (`tools/restore-database <db> <run> --verify`), before anything changes; it needs PostgreSQL running, and the backup service unless `--skip-backup`;
+2. asks (`--yes` answers for scripts), then stops every running service but PostgreSQL and the backup service (`docker compose stop`);
+3. takes a full backup of what the stack holds now, actor `dev:setup-restore` (not with `--skip-backup`). That backup is the newest of its day, so the rotation after it may delete the run being restored and the images only it lists: before it, hard links to them go into `<backup dir>/restore-kept/`, and after it, what the rotation took moves back. Afterwards the rotation keeps the new backup in the old one's place;
+4. stops the backup service and runs `tools/restore-database <db> <run> --confirm --no-fresh-dump` for each database in the manifest, which recreates, restores, compares, migrates, and, for `inbox_db`, copies back the capture images (above);
+5. starts again what ran before with `docker compose start`, which recreates nothing, and waits until the gateway and the core services answer.
+
+If a database fails, everything stays stopped, and it prints how to try again (`./setup.sh restore <run> --skip-backup`), how to go back (the same with the backup of step 3), and how to start as it is. `./setup.sh restore` without a run, or with a day, passes over the backups taken before a restore; the list marks them.
 
 ## Checking a backup
 
@@ -50,7 +69,7 @@ tools/restore-database finance latest              # shows the plan, changes not
 tools/restore-database finance 20261011T011500Z --confirm
 ```
 
-The database is named by service or database name; `latest` is the newest run with a good dump of it. Without `--confirm` it checks the dump and prints the plan. With `--confirm` it:
+The database is named by service or database name; `latest` is the newest run with a good dump of it. Without `--confirm` it checks the dump and prints the plan; `--verify` only checks the dump, without Docker, and exits 0 when it matches the manifest. With `--confirm` it:
 
 1. checks the dump's size and SHA-256 against the manifest (it refuses unknown databases and runs, a failed dump, and any mismatch);
 2. takes a fresh dump of the database as it is now, a backup run of that one database, and prints where it went (`~/life-os.backups/auto/<run>/finance_db.dump`);
@@ -85,8 +104,8 @@ When the volume `lifeos-postgres-data` is gone or unusable, but the host and `~/
 1. **Secrets.** Make sure `.env` has every database password, including `LIFE_OS_BACKUP_DB_PASSWORD`, from your own copy of it. The roles are created from it; the dumps do not contain them.
 2. **Stop everything but PostgreSQL**, so nothing writes to empty databases: `docker compose stop` (never `down --volumes`). If the old volume still exists but is broken, keep it aside until you are done; removing it is your decision.
 3. **A fresh PostgreSQL.** `docker compose up -d --no-build --no-deps postgres` on an empty `lifeos-postgres-data` runs provisioning: every role and empty database in the registry, and `lifeos_backup`.
-4. **Pick the run**: the newest successful full run, `ls ~/life-os.backups/auto` and its `manifest.json` (`"result": "succeeded"`, `"scope": "all"`), ideally one whose restore check passed (`auto/restore-checks.json`).
-5. **Restore every database**, without fresh dumps (there is nothing to keep):
+4. **Pick the run**: the newest successful full run, `./setup.sh restore list` (or `ls ~/life-os.backups/auto` and its `manifest.json`: `"result": "succeeded"`, `"scope": "all"`), ideally one whose restore check passed (`auto/restore-checks.json`).
+5. **Restore every database**, without a backup first (there is nothing to keep): `./setup.sh restore 20261011T011500Z --skip-backup`. With only PostgreSQL running, it stops nothing and starts nothing again; it runs, for each database:
 
    ```sh
    run=20261011T011500Z

@@ -335,6 +335,7 @@ The `backup` service dumps every database in the registry each night at `LIFE_OS
 ```sh
 tools/backup-now                                       # back up now and wait for the result
 docker compose exec -T backup /service restore-check   # run a restore check now
+./setup.sh restore list                                # the full backups; ./setup.sh restore <run> restores everything
 tools/restore-database finance latest                  # show a restore plan; --confirm restores
 tools/restore-media latest                             # capture photos; --confirm restores
 ```

@@ -57,7 +57,7 @@ What changes:
 
 ## Going back
 
-Going back to an older version is not supported: an update can change the databases, and those changes only go forward. If an update goes wrong, restore the backup it took first ([Backups](backups.md#restore)), with the old release's files.
+Going back to an older version is not supported: an update can change the databases, and those changes only go forward. If an update goes wrong, restore the backup it took first, with the old release's files: download them as for an update, then run `./setup.sh update --skip-backup`, `./setup.sh restore <the backup>` (`./setup.sh restore list` lists them), and `./setup.sh up` ([Backups → Restore](backups.md#restore)).
 
 ## Verify the images
 
