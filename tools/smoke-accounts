@@ -203,9 +203,10 @@ done
 # Without the gateway: straight to the Dashboard's port, from its own
 # container, with a stand-in outside server there that records every
 # request it gets. Each path names that server; it must get none, and
-# the Dashboard must answer each at once with 400 or 404 (or, for a
-# literal backslash, Next.js's own 308 to the same path with slashes, on
-# its own origin). A service the gateway routes itself is not passed on by
+# the Dashboard must answer each at once with 400 or 404 (or Next.js's
+# own 405 for a method the route does not have, or, for a literal
+# backslash, its 308 to the same path with slashes, on its own origin).
+# A service the gateway routes itself is not passed on by
 # the Dashboard outside development (404); the backups are, as before.
 direct=$(cat <<'EOF'
 const http = require("node:http");
@@ -265,7 +266,7 @@ EOF
 )
 "${compose[@]}" exec -T dashboard node -e "$direct" >"$work/direct.json" || fail "the direct check did not run: $(cat "$work/direct.json")"
 jq -e '.hits == []' "$work/direct.json" >/dev/null || fail "the Dashboard fetched a URL a path named: $(jq -c .hits "$work/direct.json")"
-not_refused='[.results[] | select((.status == 400 or .status == 404 or
+not_refused='[.results[] | select((.status == 400 or .status == 404 or .status == 405 or
   (.status == 308 and (.location // "" | test("^/[^/\\\\]")))) | not)]'
 jq -e "$not_refused == []" "$work/direct.json" >/dev/null ||
   fail "the Dashboard did not refuse: $(jq -c "$not_refused" "$work/direct.json")"
