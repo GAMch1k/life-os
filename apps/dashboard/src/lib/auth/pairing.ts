@@ -8,6 +8,7 @@ import {
   PAIRING_LINK,
 } from "./constants";
 import { normalizeSetupCode, sha256Hex } from "./store";
+import { addressKey } from "./throttle";
 
 /**
  * Pairing a phone (docs/api/devices.md#pairing): a single-use code, valid 5
@@ -155,7 +156,8 @@ export async function notePairedKey(
  * Limits redeeming codes per address (in memory): 5 tries a minute, and
  * after 10 wrong codes within 15 minutes, none for 15 minutes. A code is
  * 80 random bits and lives 5 minutes, so this only keeps guessing (and the
- * security log) quiet.
+ * security log) quiet. An address is an IPv4 address or an IPv6 /64
+ * (addressKey).
  */
 export class PairingLimiter {
   private readonly tries = new Map<string, number[]>();
@@ -170,7 +172,8 @@ export class PairingLimiter {
   ) {}
 
   /** Milliseconds to wait before this address may try again; 0 to go on. */
-  attempt(address: string, now = Date.now()): number {
+  attempt(client: string, now = Date.now()): number {
+    const address = addressKey(client);
     const blocked = this.blockedUntil.get(address);
     if (blocked !== undefined) {
       if (blocked > now) return blocked - now;
@@ -188,7 +191,8 @@ export class PairingLimiter {
   }
 
   /** A wrong code from this address. */
-  failed(address: string, now = Date.now()) {
+  failed(client: string, now = Date.now()) {
+    const address = addressKey(client);
     const recent = (this.failures.get(address) ?? []).filter(
       (at) => now - at < this.windowMs,
     );

@@ -32,6 +32,39 @@ function required(source: Source, name: string): string {
   return value;
 }
 
+/** Better Auth's secret is at least this many bytes (./setup.sh makes 64). */
+export const AUTH_SECRET_MIN_BYTES = 32;
+
+/** Whether a value is still one of .env.example's replace-with-… placeholders. */
+export function isPlaceholder(value: string): boolean {
+  return /^replace-with-/i.test(value.trim());
+}
+
+/**
+ * A value that must not be public: set, and not .env.example's placeholder,
+ * which anyone can read. Refused at start with what to do instead.
+ */
+function notPlaceholder(source: Source, name: string): string {
+  const value = required(source, name);
+  if (isPlaceholder(value)) {
+    throw new Error(
+      `${name} is still .env.example's placeholder: ./setup.sh update writes a new one, or see docs/install/accounts.md`,
+    );
+  }
+  return value;
+}
+
+/** LIFE_OS_AUTH_SECRET: not the placeholder, and long enough to be a key. */
+function authSecret(source: Source): string {
+  const value = notPlaceholder(source, "LIFE_OS_AUTH_SECRET");
+  if (Buffer.byteLength(value, "utf8") < AUTH_SECRET_MIN_BYTES) {
+    throw new Error(
+      `LIFE_OS_AUTH_SECRET is shorter than ${AUTH_SECRET_MIN_BYTES} bytes: make one with openssl rand -hex 32 (see docs/install/accounts.md). A new secret signs everyone out and turns two-factor sign-in off for every account.`,
+    );
+  }
+  return value;
+}
+
 /** Host names, lowercase, without a port, from a comma-separated list. */
 export function hostList(value: string | undefined): string[] {
   return (value ?? "")
@@ -66,9 +99,9 @@ export function readAuthEnv(source: Source = process.env): AuthEnv {
   }
   return {
     databaseUrl: required(source, "AUTH_DATABASE_URL"),
-    secret: required(source, "LIFE_OS_AUTH_SECRET"),
-    signingKey: required(source, "LIFE_OS_IDENTITY_SIGNING_KEY"),
-    trustedKeys: required(source, "LIFE_OS_TRUSTED_KEYS"),
+    secret: authSecret(source),
+    signingKey: notPlaceholder(source, "LIFE_OS_IDENTITY_SIGNING_KEY"),
+    trustedKeys: notPlaceholder(source, "LIFE_OS_TRUSTED_KEYS"),
     publicUrl,
     insecureLoginHosts: hostList(source.LIFE_OS_INSECURE_LOGIN_HOSTS),
     legacyAccessDefault: onOff(source.LIFE_OS_LEGACY_ACCESS, false),

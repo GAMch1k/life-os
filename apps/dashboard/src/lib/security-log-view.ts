@@ -97,6 +97,11 @@ export function securityDetail(
         ? `${what} · ${event.count.toLocaleString("en")} times`
         : what;
     }
+    case "sign_in_slowed":
+      // The account's delay after failed sign-ins from every address.
+      return second
+        ? `after ${second} failed sign-ins within an hour; browsers that signed in before are not slowed`
+        : "";
     case "sessions_revoked":
       return detail === "one"
         ? "one session"

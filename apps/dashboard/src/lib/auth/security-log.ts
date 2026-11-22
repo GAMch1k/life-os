@@ -20,6 +20,7 @@ type Queryable = Pick<Pool | PoolClient, "query">;
 export const SECURITY_EVENT_KINDS = {
   sign_in: "Signed in",
   sign_in_failed: "Sign-in failed",
+  sign_in_slowed: "Sign-ins slowed down after failed ones",
   sign_out: "Signed out",
   sessions_revoked: "Signed out elsewhere",
   password_changed: "Password changed",
