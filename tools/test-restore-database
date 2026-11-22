@@ -39,12 +39,12 @@ fail() {
   printf 'test-restore-database: %s\n' "$*" >&2
   exit 1
 }
-restore() { # runs the tool in plain-connection mode; output in $work/out
+restore() { # runs the tool (or $tool) in plain-connection mode; output in $work/out
   set +e
-  RESTORE_ADMIN_URL=$admin_url RESTORE_REGISTRY=$work/registry LIFE_OS_BACKUP_DIR=$work/backups RESTORE_MEDIA_DIR=$work/volume \
-    RESTORE_PSQL=$psql_bin RESTORE_PG_DUMP=$pg_dump_bin RESTORE_PG_RESTORE=$pg_restore_bin \
-    RESTORE_SERVICES="$service $service-worker" \
-    tools/restore-database "$@" >"$work/out" 2>&1
+  env RESTORE_ADMIN_URL="$admin_url" RESTORE_REGISTRY="$work/registry" LIFE_OS_BACKUP_DIR="$work/backups" RESTORE_MEDIA_DIR="$work/volume" \
+    RESTORE_PSQL="$psql_bin" RESTORE_PG_DUMP="$pg_dump_bin" RESTORE_PG_RESTORE="$pg_restore_bin" \
+    RESTORE_SERVICES="$service $service-worker" ${install_dir:+"RESTORE_INSTALL_DIR=$install_dir"} \
+    bash "${tool:-tools/restore-database}" "$@" >"$work/out" 2>&1
   status=$?
   set -e
 }
@@ -112,15 +112,29 @@ expect_refusal 'is not a run id' "$database" yesterday --confirm
 cp -r "$run_dir" "$work/backups/auto/20261011T021500Z"
 jq '.id = "20261011T021500Z" | .databases[0].sha256 = ("0" * 64)' "$run_dir/manifest.json" >"$work/backups/auto/20261011T021500Z/manifest.json"
 expect_refusal "the manifest says $(printf '0%.0s' {1..64})" "$database" 20261011T021500Z --confirm
+expect_refusal "the manifest says $(printf '0%.0s' {1..64})" "$database" 20261011T021500Z --verify
 jq '.id = "20261011T021500Z" | .databases[0].result = "failed" | .databases[0].error = "connect: refused"' "$run_dir/manifest.json" >"$work/backups/auto/20261011T021500Z/manifest.json"
 expect_refusal 'dump of '"$database"' failed: connect: refused' "$database" 20261011T021500Z --confirm
 jq '.id = "20261011T030000Z"' "$run_dir/manifest.json" >"$work/backups/auto/20261011T021500Z/manifest.json"
 expect_refusal 'names another run' "$database" 20261011T021500Z --confirm
 rm -rf "$work/backups/auto/20261011T021500Z"
+expect_refusal 'does not go with --confirm' "$database" "$run_id" --verify --confirm
 [[ "$(sql 'SELECT count(*) FROM notes' "$database")" == 25 ]] || fail "a refusal changed the database"
 
-printf '==> The restore\n'
+printf '==> --verify: the dump matches its manifest, and nothing changes\n'
+restore "$service" latest --verify
+[[ "$status" == 0 ]] || { cat "$work/out"; fail "--verify of a good dump exited $status"; }
+grep -qF "The dump of $database in run $run_id matches its manifest" "$work/out" || { cat "$work/out"; fail "--verify did not say the dump matches"; }
+[[ "$(sql 'SELECT count(*) FROM notes' "$database")" == 25 ]] || fail "--verify changed the database"
+
+# As ./setup.sh restore runs them: copies of both tools, in a directory of
+# their own, for the install in RESTORE_INSTALL_DIR.
+printf '==> The restore, by copies of the tools elsewhere\n'
+mkdir -p "$work/carried"
+cp tools/restore-database tools/restore-media "$work/carried/"
+tool=$work/carried/restore-database install_dir=$work
 restore "$service" latest --confirm
+tool='' install_dir=''
 [[ "$status" == 0 ]] || { cat "$work/out"; fail "the restore exited $status"; }
 cat "$work/out"
 [[ "$(sql 'SELECT count(*) FROM notes' "$database")" == 20 ]] || fail "notes were not restored to the backup's 20"

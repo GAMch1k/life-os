@@ -44,6 +44,11 @@ services/mcp/claude-code, written into its claude_build_files in place of the
 placeholder line, so the release adds no asset for them. Their Node.js image
 must be the processor's own (services/mcp/Dockerfile); --check checks it too.
 
+It carries the restore tools the same way (./setup.sh restore): tools/restore-database,
+tools/restore-media, and the database registry (infra/postgres/service-databases.conf),
+written into its restore_tool_files, so a release install restores with the
+tools a clone of the repository runs.
+
 Needs Python 3, with PyYAML (python3-yaml) for everything but --setup-script.
 """
 
@@ -79,6 +84,15 @@ CLAUDE_CODE_FILES = ("Dockerfile", "install.sh", "package.json", "package-lock.j
 CLAUDE_CODE_PLACEHOLDER = "  : __LIFE_OS_CLAUDE_CODE_FILES__\n  return 1\n"
 CLAUDE_CODE_DELIMITER = "LIFE_OS_CLAUDE_CODE_FILE"
 PROCESSOR_DOCKERFILE = "services/mcp/Dockerfile"
+# The restore tools that setup.sh carries (./setup.sh restore): {name in
+# setup.sh's directory: file in the repository}.
+RESTORE_FILES = {
+    "restore-database": "tools/restore-database",
+    "restore-media": "tools/restore-media",
+    "service-databases.conf": "infra/postgres/service-databases.conf",
+}
+RESTORE_PLACEHOLDER = "  : __LIFE_OS_RESTORE_FILES__\n  return 1\n"
+RESTORE_DELIMITER = "LIFE_OS_RESTORE_FILE"
 
 REGISTRY = "${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}"
 VERSION = "${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}"
@@ -311,18 +325,38 @@ def claude_code_files():
     return files
 
 
+def restore_files():
+    """{name: content} of the restore tools and registry that setup.sh carries."""
+    files = {}
+    for name, path in RESTORE_FILES.items():
+        with open(os.path.join(REPO_ROOT, path), encoding="utf-8") as source:
+            content = source.read()
+        if not content.endswith("\n") or f"\n{RESTORE_DELIMITER}\n" in "\n" + content:
+            raise BundleError(f"{path} must end in a newline and not have the line {RESTORE_DELIMITER}")
+        files[name] = content
+    return files
+
+
 def setup_script(version=None):
-    """setup.sh as a release ships it: the local Claude Code build written into
-    it, and, with a version, its version placeholder set to it."""
+    """setup.sh as a release ships it: the local Claude Code build and the
+    restore tools written into it, and, with a version, its version
+    placeholder set to it."""
     with open(os.path.join(REPO_ROOT, SETUP_SCRIPT), encoding="utf-8") as source:
         script = source.read()
     if script.count(CLAUDE_CODE_PLACEHOLDER) != 1:
         raise BundleError(f"{SETUP_SCRIPT} must have its claude_build_files placeholder once")
+    if script.count(RESTORE_PLACEHOLDER) != 1:
+        raise BundleError(f"{SETUP_SCRIPT} must have its restore_tool_files placeholder once")
     files = "".join(
         f"  cat >\"$1/{name}\" <<'{CLAUDE_CODE_DELIMITER}'\n{content}{CLAUDE_CODE_DELIMITER}\n"
         for name, content in claude_code_files().items()
     )
     script = script.replace(CLAUDE_CODE_PLACEHOLDER, files + "  return 0\n")
+    files = "".join(
+        f"  cat >\"$1/{name}\" <<'{RESTORE_DELIMITER}' || return 1\n{content}{RESTORE_DELIMITER}\n"
+        for name, content in restore_files().items()
+    )
+    script = script.replace(RESTORE_PLACEHOLDER, files + "  return 0\n")
     if version is not None:
         # setup.sh's own record of its release (else it reads .env.example's).
         script, count = re.subn(r"(?m)^release_version='__LIFE_OS_VERSION__'$", f"release_version='{version}'", script)

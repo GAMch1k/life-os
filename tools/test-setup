@@ -66,7 +66,10 @@ case $1 in
       'config --images') printf 'ghcr.io/gamch1k/life-os-tasks:preview\nbinwiederhier/ntfy:v2.37.2@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7\n' ;;
       'ps -q --status running backup') [[ ${STUB_BACKUP_RUNNING:-1} != 1 ]] || echo 3f1c0ffee ;;
       'ps -q --status running dashboard') [[ ${STUB_DASHBOARD_RUNNING:-1} != 1 ]] || echo d45hb0a2d ;;
-      'ps --services --status running') printf '%s\n' postgres tasks inbox dashboard gateway voice ;;
+      'ps --services --status running')
+        # shellcheck disable=SC2086 # one service a word
+        printf '%s\n' ${STUB_RUNNING:-postgres tasks inbox dashboard gateway voice}
+        ;;
       'ps -q processor') : ;;
       'ps --all --format'*) cat "${STUB_PS_FILE:-/dev/null}" ;;
       exec*)
@@ -101,6 +104,16 @@ case $1 in
             [[ -n ${STUB_ACCOUNT:-} ]] || printf 'Setup code: ABCD-EFGH-JKLM-NPQR\nOpen it at /setup.\n'
             ;;
           *'lifeos-auth.mjs'*) printf 'account command: %s\n' "${*:6}"; exit "${STUB_ACCOUNT_EXIT:-0}" ;;
+          # A backup: STUB_BACKUP_EXIT fails it; the rotation after a
+          # good one removes STUB_ROTATE's paths (runs and images).
+          *'backup /service now'*)
+            if [[ ${STUB_BACKUP_EXIT:-0} != 0 ]]; then
+              echo 'Backup 20261122T130000Z failed in 0.2 s (manual, all databases), 0 B.'
+              exit "$STUB_BACKUP_EXIT"
+            fi
+            for path in ${STUB_ROTATE:-}; do rm -r "$path"; done
+            echo 'Backup 20261122T130000Z succeeded in 1.0 s (manual, all databases), 3.5 KiB.'
+            ;;
           *) exit "${STUB_BACKUP_EXIT:-0}" ;;
         esac
         ;;
@@ -195,6 +208,36 @@ cat >"$stubs/openssl" <<'EOF'
 exec /usr/bin/openssl "$@"
 EOF
 chmod 755 "$stubs/docker" "$stubs/curl" "$stubs/openssl"
+
+# restore-database (./setup.sh restore, LIFE_OS_SETUP_RESTORE_TOOLS): logs
+# its arguments, where it works, and the registry; refuses a run that is
+# gone, or (inbox_db) an image of it that is gone, as the tool does; fails
+# --verify for STUB_VERIFY_FAIL's database and a restore for
+# STUB_RESTORE_FAIL's. tools/test-restore-database tests the tool itself.
+restore_tools=$work/restore-tools
+mkdir -p "$restore_tools"
+cat >"$restore_tools/restore-database" <<'EOF'
+#!/usr/bin/env bash
+printf 'restore-database %s [in %s, registry %s]\n' "$*" "$RESTORE_INSTALL_DIR" "$RESTORE_REGISTRY" >>"$STUB_LOG"
+db=$1 run=$2
+backups=$(sed -n 's/^LIFE_OS_BACKUP_DIR=//p' "$RESTORE_INSTALL_DIR/.env" | tail -n 1)
+[[ -f $backups/auto/$run/manifest.json ]] || { echo "restore-database: there is no run $run in $backups/auto" >&2; exit 2; }
+if [[ $3 == --verify ]]; then
+  [[ $db != "${STUB_VERIFY_FAIL:-}" ]] || { echo "restore-database: the dump's SHA-256 is 00, the manifest says 11" >&2; exit 2; }
+  echo "The dump of $db in run $run matches its manifest."
+  exit 0
+fi
+[[ $db != "${STUB_RESTORE_FAIL:-}" ]] || { echo 'The restored database differs from the manifest:' >&2; exit 1; }
+if [[ $db == inbox_db ]]; then
+  for hash in $(jq -r '.[].sha256' "$backups/auto/$run/media-inbox.json"); do
+    [[ -f $backups/media/${hash:0:2}/$hash ]] || { echo "restore-media: $hash is not in the media store" >&2; exit 1; }
+  done
+  echo "Restored Inbox images from run $run: copied 1, damaged 0."
+fi
+echo "Restored $db from run $run."
+EOF
+cp "$restore_tools/restore-database" "$restore_tools/restore-media"
+cp infra/postgres/service-databases.conf "$restore_tools/"
 
 # The install compose: compose.yaml as the release ships it, images only.
 sed -E '/^[[:space:]]+build:/d' compose.yaml >"$work/compose.yaml"
@@ -1672,6 +1715,264 @@ ok "a clone's image gets Claude Code from source" test "$(value LIFE_OS_AI_PROVI
 ok 'says to build it first' output_has 'docker compose build processor'
 ok 'and builds no local image' bash -c "! grep -qE '^docker (build|pull)' '$case_dir.log'"
 ok 'nor points the processor at one' test -z "$(value LIFE_OS_PROCESSOR_IMAGE)"
+
+# ---------- Restore ----------
+# ./setup.sh restore picks a backup, checks it, stops Life OS, backs up what
+# it holds, restores each database with restore-database (stand-ins here),
+# and starts it again. The release's setup.sh carries the tools themselves.
+ok 'one restore placeholder in setup.sh' test "$(grep -c '__LIFE_OS_RESTORE_FILES__' setup.sh)" -eq 1
+ok "the release's setup.sh has the restore tools instead" bash -c "! grep -q '__LIFE_OS_RESTORE_FILES__' '$work/setup.sh'"
+mkdir -p "$work/carried"
+# restore_tool_files of the release's setup.sh: to the line after the last
+# file's end, which returns 0.
+carried=$(awk '/^restore_tool_files\(\) \{$/ { on = 1 } on { print } on && prev == "LIFE_OS_RESTORE_FILE" && $0 == "  return 0" { print "}"; exit } { prev = $0 }' "$work/setup.sh")
+(eval "$carried" && restore_tool_files "$work/carried") || true
+ok 'it carries tools/restore-database as it is' cmp -s tools/restore-database "$work/carried/restore-database"
+ok 'and tools/restore-media' cmp -s tools/restore-media "$work/carried/restore-media"
+ok 'and the database registry' cmp -s infra/postgres/service-databases.conf "$work/carried/service-databases.conf"
+
+# make_run DIR ID RESULT SCOPE [ACTOR] [TASKS_BYTES]: a backup run in the
+# backup directory DIR, of three databases (tasks_db's dump 2048 bytes, or
+# TASKS_BYTES), listing one Inbox image ($image) of 5 bytes.
+make_run() {
+  mkdir -p "$1/auto/$2"
+  jq -n --arg id "$2" --arg result "$3" --arg scope "$4" --arg actor "${5:-}" --argjson tasks "${6:-2048}" '{
+    formatVersion: 1, id: $id, trigger: "schedule", scope: $scope, result: $result, actor: $actor,
+    databases: [
+      {name: "tasks_db", result: $result, bytes: $tasks, tables: [{schema: "public", name: "tasks", rows: 3}]},
+      {name: "inbox_db", result: $result, bytes: 1024, tables: [{schema: "public", name: "inbox_items", rows: 2}]},
+      {name: "auth_db", result: $result, bytes: 512, tables: []}],
+    media: {service: "inbox", database: "inbox_db", list: "media-inbox.json", count: 1, bytes: 5}}' >"$1/auto/$2/manifest.json"
+  jq -n --arg image "$image" '[{sha256: $image, bytes: 5}]' >"$1/auto/$2/media-inbox.json"
+}
+make_runs() { # the backups of the restore cases, in the backup directory $1
+  mkdir -p "$1/media/${image:0:2}"
+  printf 'photo' >"$1/media/${image:0:2}/$image"
+  make_run "$1" 20261120T021500Z succeeded all
+  make_run "$1" 20261121T021500Z succeeded all
+  make_run "$1" 20261121T120000Z succeeded subset
+  make_run "$1" 20261121T230000Z succeeded all dev:setup-restore
+  make_run "$1" 20261122T021500Z failed all
+}
+image=$(printf 'photo' | sha256sum | cut -d ' ' -f 1)
+running='postgres backup tasks inbox dashboard gateway'
+# The docker and restore-database calls of the last run, in order.
+restore_steps() {
+  grep -oE '^(docker compose (stop|start)( [a-z-]+)+|docker compose exec -T backup /service now|restore-database [a-z_]+ [0-9TZ]+ --[a-z]+)' "$case_dir.log" \
+    | sed -E 's/ \[LIFE_OS_VERSION=.*//; s/^docker compose //; s/^restore-database //' | paste -sd ';' -
+}
+
+new_case restore
+run LIFE_OS_TIMEZONE=Europe/Berlin -- --yes
+backups=$case_dir/backups
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" -- restore
+ok 'restore without backups' test "$status" -eq 1
+ok 'says there are none yet' output_has 'there are no backups yet'
+mkdir -p "$backups/auto"
+make_run "$backups" 20261119T021500Z failed all
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" -- restore list
+ok 'only a failed backup: nothing to restore' test "$status" -eq 1
+ok 'and says so' output_has 'can be restored yet'
+rm -r "$backups/auto/20261119T021500Z"
+make_runs "$backups"
+: >"$case_dir.log"
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" -- restore list
+ok 'restore list' test "$status" -eq 0
+ok 'lists the backups of every database, in Life OS timezone' output_has '2026-11-21 03:15  20261121T021500Z  3.5 KiB, 3 databases and 1 Inbox image'
+ok 'marks the backup taken before a restore' output_has '2026-11-22 00:00  20261121T230000Z  3.5 KiB, 3 databases and 1 Inbox image, taken before a restore'
+ok 'newest first' test "$(grep -oE '  20261[0-9T]+Z  ' "$case_dir.last" | tr -d ' ' | paste -sd ' ' -)" = '20261121T230000Z 20261121T021500Z 20261120T021500Z'
+ok 'names the timezone' output_has 'times in Europe/Berlin'
+ok 'suggests a day restore takes' output_has 'such as ./setup.sh restore 2026-11-21.'
+ok 'not a backup of some databases, nor a failed one' bash -c "! grep -qE '20261121T120000Z|20261122T021500Z' '$case_dir.last'"
+ok 'listing runs no docker command' test ! -s "$case_dir.log"
+
+# Asked first; no changes nothing.
+printf 'n\n' >"$work/answers"
+stdin=$work/answers
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" STUB_RUNNING="$running" -- restore
+stdin=/dev/null
+ok 'restore asks first' test "$status" -eq 1
+ok 'the newest backup, not the one taken before a restore' output_has 'as it was at 2026-11-21 03:15 (Europe/Berlin): backup 20261121T021500Z, 3.5 KiB, 3 databases and 1 Inbox image.'
+ok "checks each database's dump first" test "$(restore_steps)" = 'tasks_db 20261121T021500Z --verify;inbox_db 20261121T021500Z --verify;auth_db 20261121T021500Z --verify'
+ok 'with the tools of the release, on this install' logged "--verify [in $case_dir, registry $restore_tools/service-databases.conf]"
+ok 'no changes nothing' output_has 'nothing was changed'
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" STUB_RUNNING="$running" -- restore
+ok 'without --yes or an answer, nothing either' test "$status" -eq 1
+ok 'and it says to use --yes' output_has 'use --yes'
+
+# A day's backup, with --yes. The backup taken first is the newest of its
+# day, and its rotation takes the day's other backup and the image only that
+# one lists: restore puts them back before it restores.
+: >"$case_dir.log"
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" STUB_RUNNING="$running" LIFE_OS_SETUP_WAIT_SECONDS=5 \
+  STUB_ROTATE="$backups/auto/20261120T021500Z $backups/media/${image:0:2}/$image" -- --yes restore 2026-11-20
+ok 'restore 2026-11-20 --yes' test "$status" -eq 0
+ok "that day's backup, with its date and size" output_has 'as it was at 2026-11-20 03:15 (Europe/Berlin): backup 20261120T021500Z, 3.5 KiB, 3 databases and 1 Inbox image.'
+ok 'checks, stops all but PostgreSQL and the backup service, backs up, stops that, restores each database without a fresh dump, starts again' \
+  test "$(restore_steps)" = 'tasks_db 20261120T021500Z --verify;inbox_db 20261120T021500Z --verify;auth_db 20261120T021500Z --verify;stop tasks inbox dashboard gateway;exec -T backup /service now;stop backup;tasks_db 20261120T021500Z --confirm;inbox_db 20261120T021500Z --confirm;auth_db 20261120T021500Z --confirm;start backup tasks inbox dashboard gateway'
+ok 'the backup first is a restore' logged 'docker compose exec -T backup /service now -actor dev:setup-restore'
+ok 'restores without a fresh dump of each database' test "$(grep -c -- '--confirm --no-fresh-dump' "$case_dir.log")" -eq 3
+ok 'the backup the rotation took is back' test -f "$backups/auto/20261120T021500Z/manifest.json"
+ok 'and its image' test "$(cat "$backups/media/${image:0:2}/$image")" = photo
+ok 'nothing kept aside is left' test ! -e "$backups/restore-kept"
+ok 'waits until Life OS answers' logged 'docker compose exec -T dashboard node -e'
+ok 'says what Life OS holds now' output_has 'Life OS holds what it held at 2026-11-20 03:15 (Europe/Berlin): the 3 databases of backup 20261120T021500Z'
+ok 'each database' output_has 'tasks_db             1 table, 3 rows, as in the backup'
+ok 'and the images' output_has 'Inbox images: 1 copied back onto the volume'
+ok 'how to go back' output_has 'To go back to it: ./setup.sh restore 20261122T130000Z'
+ok 'and which backup the backup service keeps now' output_has 'instead of 20261120T021500Z'
+ok 'and what backups do not hold' output_has '.env and the AI sign-in'
+ok 'no warning' bash -c "! grep -q '^Warning: ' '$case_dir.last'"
+
+# By its name, a backup taken before a restore; one that is not a backup of
+# every database, or not there, or a day without one: refused.
+: >"$case_dir.log"
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" STUB_RUNNING="$running" LIFE_OS_SETUP_WAIT_SECONDS=5 -- --yes restore 20261121T230000Z
+ok 'restore by name' test "$status" -eq 0
+ok 'also one taken before a restore' output_has 'as it was at 2026-11-22 00:00 (Europe/Berlin)'
+ok 'and the rotation took nothing' bash -c "! grep -q 'instead of' '$case_dir.last'"
+: >"$case_dir.log"
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" -- --yes restore 20261121T120000Z
+ok 'a backup of some databases is refused' test "$status" -eq 1
+ok 'and why' output_has 'it is not a backup of every database that succeeded'
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" -- --yes restore 20200101T000000Z
+ok 'a backup that is not there' output_has 'there is no backup 20200101T000000Z'
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" -- --yes restore 2026-11-19
+ok 'a day without a backup' output_has 'there is no backup of 2026-11-19 (in Europe/Berlin)'
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" -- --yes restore yesterday
+ok 'restore yesterday is not a backup' test "$status" -eq 2
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" -- --yes restore 2026-11-20 2026-11-21
+ok 'one backup at a time' test "$status" -eq 2
+ok 'none of these ran docker' test ! -s "$case_dir.log"
+
+# Checks before anything changes: the dumps, PostgreSQL, the backup service.
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" STUB_RUNNING="$running" STUB_VERIFY_FAIL=inbox_db -- --yes restore
+ok 'a dump that does not match its manifest' test "$status" -eq 1
+ok 'is named' output_has 'its dump of inbox_db does not match its manifest'
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" STUB_RUNNING='tasks gateway' -- --yes restore
+ok 'PostgreSQL not running' test "$status" -eq 1
+ok 'says to start Life OS' output_has 'Start Life OS first (./setup.sh up)'
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" STUB_RUNNING='postgres tasks' -- --yes restore
+ok 'the backup service not running' test "$status" -eq 1
+ok 'suggests --skip-backup' output_has 'restore without that backup: ./setup.sh restore 20261121T021500Z --skip-backup'
+ok 'nothing stopped or restored' bash -c "! grep -qE 'compose stop|--confirm' '$case_dir.log'"
+: >"$case_dir.log"
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" STUB_RUNNING='postgres tasks' -- --yes restore --skip-backup
+ok 'restore --skip-backup' test "$status" -eq 0
+ok 'backs nothing up' test "$(restore_steps)" = 'tasks_db 20261121T021500Z --verify;inbox_db 20261121T021500Z --verify;auth_db 20261121T021500Z --verify;stop tasks;tasks_db 20261121T021500Z --confirm;inbox_db 20261121T021500Z --confirm;auth_db 20261121T021500Z --confirm;start tasks'
+ok 'and says so' output_has 'is not backed up first (--skip-backup)'
+
+# The backup first fails: Life OS starts again, nothing restored.
+: >"$case_dir.log"
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" STUB_RUNNING="$running" STUB_BACKUP_EXIT=1 -- --yes restore
+ok 'a failed backup first stops the restore' test "$status" -eq 1
+ok 'says nothing was restored' output_has 'Nothing was restored, and Life OS runs as before.'
+ok 'starts again what it stopped' test "$(restore_steps | sed 's/^.*--verify;//')" = 'stop tasks inbox dashboard gateway;exec -T backup /service now;start tasks inbox dashboard gateway'
+ok 'and keeps nothing aside' test ! -e "$backups/restore-kept"
+
+# A database fails: Life OS stays stopped, and restore says how to go on.
+: >"$case_dir.log"
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" STUB_RUNNING="$running" STUB_RESTORE_FAIL=inbox_db -- --yes restore
+ok 'a failed database' test "$status" -eq 1
+ok 'shows why' output_has 'The restored database differs from the manifest'
+ok 'and what is restored' output_has '1 of the 3 databases are restored from backup 20261121T021500Z (tasks_db).'
+ok 'how to try again' output_has 'try again, without another backup first: ./setup.sh restore 20261121T021500Z --skip-backup'
+ok 'how to go back' output_has './setup.sh restore 20261122T130000Z --skip-backup'
+ok 'Life OS stays stopped' bash -c "! grep -q 'compose start' '$case_dir.log'"
+ok 'no secret printed' no_secret_printed
+
+# On a new server, the empty Life OS backs itself up a minute after it
+# starts (and again each night): those backups are the newest, and much
+# smaller than the older ones copied from the old server.
+new_case restore-new-server
+run LIFE_OS_TIMEZONE=Europe/Berlin -- --yes
+backups=$case_dir/backups
+mkdir -p "$backups/media/${image:0:2}"
+printf 'photo' >"$backups/media/${image:0:2}/$image"
+make_run "$backups" 20261119T021500Z succeeded all '' 400000
+make_run "$backups" 20261120T021500Z succeeded all '' 400000
+make_run "$backups" 20261122T100000Z succeeded all '' 0
+make_run "$backups" 20261122T110000Z succeeded all '' 0
+: >"$case_dir.log"
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" -- restore list
+ok 'restore list shows the size of each backup, dumps and images' output_has '2026-11-20 03:15  20261120T021500Z  392.1 KiB, 3 databases and 1 Inbox image'
+ok 'the small ones too' output_has '2026-11-22 12:00  20261122T110000Z  1.5 KiB, 3 databases and 1 Inbox image'
+ok "suggests the day of the bigger one, not the small one's" output_has 'such as ./setup.sh restore 2026-11-20.'
+small='backup 20261122T110000Z (2026-11-22 12:00, 1.5 KiB, 3 databases and 1 Inbox image) is less than a quarter of the size of an older one, 20261120T021500Z (2026-11-20 03:15, 392.1 KiB, 3 databases and 1 Inbox image)'
+for latest in '' latest; do
+  run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" STUB_RUNNING="$running" -- --yes restore ${latest:+"$latest"}
+  ok "restore ${latest:-without a backup} --yes refuses a newest backup much smaller than an older one" test "$status" -eq 1
+  ok 'names both, past the other small one' output_has "$small"
+  ok 'with the command for the older one' output_has 'To restore the older one: ./setup.sh restore 20261120T021500Z --yes.'
+  ok 'and for the newest all the same' output_has 'name it: ./setup.sh restore 20261122T110000Z --yes. Nothing was changed.'
+done
+ok 'before any docker command or check' test ! -s "$case_dir.log"
+# Asked: a warning, after the backup's date and size, before the question.
+printf 'n\n' >"$work/answers"
+stdin=$work/answers
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" STUB_RUNNING="$running" -- restore
+stdin=/dev/null
+ok 'asked, restore warns' output_has "Warning: $small. It may be the empty Life OS of a new server rather than your data. To restore the older one: ./setup.sh restore 20261120T021500Z"
+ok 'after what it would restore' test "$(grep -n '^This puts Life OS back' "$case_dir.last" | cut -d: -f1)" -lt "$(grep -n '^Warning: backup 20261122T110000Z' "$case_dir.last" | cut -d: -f1)"
+ok 'and no changes nothing' output_has 'nothing was changed'
+ok 'nothing stopped' bash -c "! grep -q 'compose stop' '$case_dir.log'"
+# Named by its day or its name, the small backup is restored with --yes,
+# after the warning.
+for named in 2026-11-22 20261122T110000Z; do
+  : >"$case_dir.log"
+  run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" STUB_RUNNING="$running" LIFE_OS_SETUP_WAIT_SECONDS=5 -- --yes restore "$named"
+  ok "restore $named --yes restores the small backup it names" test "$status" -eq 0
+  ok 'after the warning' output_has "Warning: $small"
+  ok 'that one' logged 'restore-database tasks_db 20261122T110000Z --confirm'
+done
+# A backup as big as the older ones: no warning.
+run LIFE_OS_SETUP_RESTORE_TOOLS="$restore_tools" STUB_RUNNING="$running" LIFE_OS_SETUP_WAIT_SECONDS=5 -- --yes restore 2026-11-20
+ok 'restore of a backup as big as the older ones' test "$status" -eq 0
+ok 'without a warning' bash -c "! grep -q '^Warning: ' '$case_dir.last'"
+
+# ---------- jq, which restore needs ----------
+# Said at the first setup and at each update, not first in a disaster. The
+# host's tools but jq, on PATH.
+nojq=$work/nojq
+mkdir -p "$nojq"
+for tool in /usr/bin/* /bin/*; do
+  [[ ${tool##*/} == jq || -e $nojq/${tool##*/} ]] || ln -s "$tool" "$nojq/${tool##*/}"
+done
+new_case no-jq
+run PATH="$stubs:$nojq" LIFE_OS_TIMEZONE=UTC -- --yes
+ok 'a first setup without jq' test "$status" -eq 0
+ok 'warns that restore needs it' output_has 'Warning: jq is not installed. ./setup.sh restore needs it to read the backups: install it now (sudo apt install jq)'
+run PATH="$stubs:$nojq" STUB_BACKUP_RUNNING=0 LIFE_OS_SETUP_WAIT_SECONDS=1 -- update --skip-backup
+ok 'update without jq' test "$status" -eq 0
+ok 'warns too' output_has 'Warning: jq is not installed.'
+run PATH="$stubs:$nojq" -- restore list
+ok 'restore without jq stops' test "$status" -eq 1
+ok 'and says to install it' output_has 'restore needs jq to read the backups: install it (sudo apt install jq)'
+run STUB_BACKUP_RUNNING=0 LIFE_OS_SETUP_WAIT_SECONDS=1 -- update --skip-backup
+ok 'with jq: no such warning' bash -c "! grep -q 'jq is not installed' '$case_dir.last'"
+
+# The repository's setup.sh outside a clone has no tools to restore with.
+new_case restore-repository-script repository
+run LIFE_OS_TIMEZONE=UTC -- --yes
+make_runs "$case_dir/backups"
+run STUB_RUNNING="$running" -- --yes restore
+ok "the repository's setup.sh cannot restore" test "$status" -eq 1
+ok 'says to use the release one' output_has 'without the restore tools'
+
+# In a clone it runs the clone's tools/ and registry.
+new_case restore-checkout repository
+mkdir -p "$case_dir/.git" "$case_dir/tools" "$case_dir/infra/postgres"
+cp "$restore_tools/restore-database" "$restore_tools/restore-media" "$case_dir/tools/"
+cp infra/postgres/service-databases.conf "$case_dir/infra/postgres/"
+run LIFE_OS_TIMEZONE=UTC -- --yes
+make_runs "$work/home/life-os.backups"
+: >"$case_dir.log"
+run STUB_RUNNING="$running" LIFE_OS_SETUP_WAIT_SECONDS=5 -- --yes restore
+ok 'restore in a clone' test "$status" -eq 0
+ok "with the clone's tools and registry" logged "restore-database tasks_db 20261121T021500Z --confirm --no-fresh-dump [in $case_dir, registry $case_dir/infra/postgres/service-databases.conf]"
+ok 'in UTC, as its .env says' output_has 'as it was at 2026-11-21 02:15 (UTC)'
+ok 'starts again without recreating anything' logged 'docker compose start backup tasks inbox dashboard gateway'
+ok 'never up' bash -c "! grep -q 'compose up' '$case_dir.log'"
 
 # ---------- One list of Whisper languages ----------
 # setup.sh's copy of whisper.cpp's language codes is the list the whisper

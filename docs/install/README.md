@@ -15,7 +15,7 @@ This guide installs Life OS from its published Docker images with one setup scri
 - **Memory:** 2 GB at least, 4 GB to be comfortable. Life OS uses about 0.5 GB when idle. Whisper can use up to 2 GB while it transcribes a voice note, and each AI run uses a few hundred MB.
 - **Disk:** 10 GB free. The images take about 3 GB and the Whisper model about 0.5 GB; your data and the nightly backups grow from there.
 - **Docker Engine 25 or newer with the Compose plugin** (`docker compose`, version 2.27 or newer). Install it from [docs.docker.com](https://docs.docker.com/engine/install/). The reference server runs Docker Engine 29 and Compose 5.1.
-- **A user that can run Docker** (a member of the `docker` group), plus `curl`, `openssl`, and Bash 4.4 or newer, which current Linux distributions have.
+- **A user that can run Docker** (a member of the `docker` group), plus `curl`, `openssl`, and Bash 4.4 or newer, which current Linux distributions have, and `jq` (`sudo apt install jq`), which [restoring a backup](backups.md#restore) needs: install it now, not when you need a restore.
 - **One Life OS per machine.** Every install is the same Docker Compose project, `lifeos`, with the same `lifeos-*` volumes, so a second one in another directory would take the first one over. `setup.sh` refuses `up`, `update`, and `codex` while Docker has `lifeos` containers started from another directory, and says where they are.
 
 ## Quick start
@@ -105,6 +105,7 @@ The phone and watch apps are on their own page: [Phone and watch apps](phone-app
 | `./setup.sh` | First-time setup: checks, questions, `.env`, integrations. |
 | `./setup.sh up` | Starts Life OS (downloading missing images), waits until it answers, prints the address. |
 | `./setup.sh update` | Backs up, downloads this release's images, restarts. Download a newer release's files first: [Updating](updating.md). |
+| `./setup.sh restore [list\|DAY\|BACKUP]` | Lists the backups, or puts Life OS back as one has it, after backing up what it holds now ([Restore](backups.md#restore)). |
 | `./setup.sh status` | What runs, and which modules are on and set up. Never prints a secret. |
 | `./setup.sh modules [on\|off ID...]` | Lists the optional modules, or turns them on or off ([Modules](modules.md)). |
 | `./setup.sh check` | Only checks the server. |

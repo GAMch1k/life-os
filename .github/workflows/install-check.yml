@@ -4,8 +4,9 @@
 # setup.sh, SHA256SUMS): no checkout of the repository in the install
 # directory, nothing built, the images pulled from ghcr.io. A fresh install
 # runs the core alone; the check tests that, the smokes that work against an
-# installed Life OS through its gateway on 127.0.0.1:3000, and a module
-# turned on (voice, with a voice note) and off again.
+# installed Life OS through its gateway on 127.0.0.1:3000, a backup and its
+# restore (./setup.sh restore), and a module turned on (voice, with a voice
+# note) and off again.
 #
 # release.yml runs it after every release that is not a draft. By hand:
 # Actions → Install check → Run workflow (an empty version installs the
@@ -234,6 +235,16 @@ jobs:
             [[ -d codex-home && -z "$(ls -A codex-home)" ]] || { echo "::error::setup.sh did not create an empty codex-home/"; exit 1; }
             echo "MODULES=false" >>"$GITHUB_ENV"
             echo "- A release without modules: every module runs." >>"$GITHUB_STEP_SUMMARY"
+          fi
+          # ./setup.sh restore, where the release's setup.sh has it (not
+          # v0.1.0-preview.6 and older). Not a pipe into grep -q, which
+          # pipefail could read as a failure.
+          help=$(./setup.sh help)
+          if grep -q '^  \./setup\.sh restore' <<<"$help"; then
+            echo "RESTORE=true" >>"$GITHUB_ENV"
+          else
+            echo "RESTORE=false" >>"$GITHUB_ENV"
+            echo "- A release without \`./setup.sh restore\`: no restore." >>"$GITHUB_STEP_SUMMARY"
           fi
       # Before modules only, a quirk of GitHub's runners, not of the install
       # (as CI's full-stack job, docs/operations/ci.md#full-stack-tests):
@@ -567,16 +578,108 @@ jobs:
         run: timeout 5m smokes/tools/smoke-dashboard
 
       # A backup, as ./setup.sh update makes one first, into the backups/
-      # directory setup.sh created for this user.
+      # directory setup.sh created for this user. With ./setup.sh restore,
+      # first a Task and a capture with a photo (a 1x1 PNG), which the
+      # restore below must bring back.
       - name: A backup
+        id: backup
         if: ${{ !cancelled() && steps.up.outcome == 'success' }}
         timeout-minutes: 10
         run: |
           cd "$INSTALL_DIR"
-          docker compose exec -T backup /service now -actor dev:install-check
+          if [[ "$RESTORE" == true ]]; then
+            api_auth=()
+            [[ -z "${INSTALL_TOKEN:-}" ]] || api_auth=(-H "authorization: Bearer $INSTALL_TOKEN")
+            actor=(-H 'X-Life-OS-Actor: dev:install-check')
+            task=$(curl -fsS "${api_auth[@]}" "${actor[@]}" -H 'content-type: application/json' \
+              -d '{"title":"Restore check: kept"}' "$GATEWAY/api/tasks/v1/tasks" | jq -r .id)
+            base64 -d >"$RUNNER_TEMP/photo.png" <<<'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+            media=$(curl -fsS "${api_auth[@]}" "${actor[@]}" -F "images=@$RUNNER_TEMP/photo.png;type=image/png" "$GATEWAY/api/inbox/v1/media")
+            photo=$(jq -r '.items[0].sha256' <<<"$media")
+            curl -fsS -o /dev/null "${api_auth[@]}" "${actor[@]}" -H 'content-type: application/json' \
+              -d "$(jq -c '{content: "Restore check: a photo", source: "manual", mediaReferences: [.items[0].reference]}' <<<"$media")" \
+              "$GATEWAY/api/inbox/v1/inbox-items"
+            if [[ ! "$task" =~ ^[0-9a-f-]{36}$ || ! "$photo" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::Could not make the Task and the photo the restore must bring back."
+              exit 1
+            fi
+            { echo "RESTORE_TASK=$task"; echo "RESTORE_PHOTO=$photo"; } >>"$GITHUB_ENV"
+          fi
+          docker compose exec -T backup /service now -actor dev:install-check | tee "$RUNNER_TEMP/backup.log"
+          echo "BACKUP_ID=$(sed -n 's/^Backup \([0-9]\{8\}T[0-9]\{6\}Z\) succeeded.*/\1/p' "$RUNNER_TEMP/backup.log")" >>"$GITHUB_ENV"
           files=$(find backups -type f | wc -l)
           ((files > 0)) || { echo "::error::The backup wrote nothing to backups/."; exit 1; }
           find backups -type f -printf '%P %s\n' | sort
+
+      # ./setup.sh restore (docs/install/backups.md#restore), from the
+      # release's files alone. After the backup, the Task changes, another
+      # one is made, and the photo goes from the Inbox volume. The restore of
+      # the newest backup, the one above, must bring back the Task and the
+      # photo and lose the other Task; it backs up first, and Life OS
+      # answers again with every service running.
+      - name: Restore the backup (./setup.sh restore)
+        if: ${{ !cancelled() && steps.backup.outcome == 'success' && env.RESTORE == 'true' }}
+        timeout-minutes: 15
+        run: |
+          cd "$INSTALL_DIR"
+          api_auth=()
+          [[ -z "${INSTALL_TOKEN:-}" ]] || api_auth=(-H "authorization: Bearer $INSTALL_TOKEN")
+          actor=(-H 'X-Life-OS-Actor: dev:install-check')
+          fail() { echo "::error::$*"; exit 1; }
+          title() { curl -fsS "${api_auth[@]}" "$GATEWAY/api/tasks/v1/tasks/$1" | jq -r .title; }
+          photo_code() { curl -sS -o /dev/null -w '%{http_code}' "${api_auth[@]}" "$GATEWAY/api/inbox/v1/media/$RESTORE_PHOTO"; }
+          [[ -n "$BACKUP_ID" ]] || fail "The backup step printed no backup id."
+
+          # After the backup: a change, a new Task, and the photo gone.
+          curl -fsS -o /dev/null -X PATCH "${api_auth[@]}" "${actor[@]}" -H 'content-type: application/json' \
+            -d '{"title":"Restore check: changed"}' "$GATEWAY/api/tasks/v1/tasks/$RESTORE_TASK"
+          lost=$(curl -fsS "${api_auth[@]}" "${actor[@]}" -H 'content-type: application/json' \
+            -d '{"title":"Restore check: lost"}' "$GATEWAY/api/tasks/v1/tasks" | jq -r .id)
+          docker compose run --rm --no-deps -T --user 0:0 --entrypoint rm inbox "/var/lib/lifeos/inbox-media/$RESTORE_PHOTO"
+          [[ "$(title "$RESTORE_TASK")" == 'Restore check: changed' ]] || fail "The Task did not change after the backup."
+          [[ "$(photo_code)" != 200 ]] || fail "The photo is still there after it was removed from the volume."
+
+          ./setup.sh restore list 2>&1 | tee "$RUNNER_TEMP/setup-restore-list.log"
+          grep -q "  $BACKUP_ID  " "$RUNNER_TEMP/setup-restore-list.log" || fail "./setup.sh restore list does not list backup ${BACKUP_ID}."
+          ./setup.sh restore --yes 2>&1 | tee "$RUNNER_TEMP/setup-restore.log"
+
+          # What it said: the backup above, every database checked, Life OS
+          # answers, no warning, and the backup it took first.
+          if grep '^Warning: ' "$RUNNER_TEMP/setup-restore.log"; then
+            fail "./setup.sh restore warned (above)."
+          fi
+          grep -qE "^Life OS holds what it held at .*: the [0-9]+ databases of backup $BACKUP_ID, each checked against it\.$" "$RUNNER_TEMP/setup-restore.log" \
+            || fail "./setup.sh restore did not restore backup ${BACKUP_ID}."
+          grep -qx 'Life OS answers.' "$RUNNER_TEMP/setup-restore.log" || fail "./setup.sh restore ended before Life OS answered."
+          grep -q '^Inbox images: 1 copied back onto the volume' "$RUNNER_TEMP/setup-restore.log" || fail "./setup.sh restore did not copy the photo back."
+          first=$(sed -n 's/^What it held before is backup \([0-9]\{8\}T[0-9]\{6\}Z\)\. .*/\1/p' "$RUNNER_TEMP/setup-restore.log")
+          [[ -n "$first" ]] || fail "./setup.sh restore named no backup of what Life OS held before."
+          jq -e '.actor == "dev:setup-restore" and .result == "succeeded" and .scope == "all"' "backups/auto/$first/manifest.json" >/dev/null \
+            || fail "Backup $first, taken before the restore, is not a good backup of every database."
+
+          # The data as the backup had it, through the gateway, with the
+          # token and the session the backup holds too.
+          [[ "$(title "$RESTORE_TASK")" == 'Restore check: kept' ]] || fail "The Task is not as the backup had it."
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "${api_auth[@]}" "$GATEWAY/api/tasks/v1/tasks/$lost")
+          [[ "$code" == 404 ]] || fail "The Task made after the backup is still there (${code})."
+          [[ "$(photo_code)" == 200 ]] || fail "The photo is not back."
+          curl -fsS "${api_auth[@]}" "$GATEWAY/api/inbox/v1/media/$RESTORE_PHOTO" | cmp -s - "$RUNNER_TEMP/photo.png" || fail "The photo that came back is another."
+          page_auth=()
+          [[ -z "${INSTALL_SESSION:-}" ]] || page_auth=(-H "cookie: $INSTALL_SESSION")
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "${page_auth[@]}" "$GATEWAY/tasks")
+          [[ "$code" == 200 ]] || fail "The Dashboard answered ${code} for /tasks after the restore, not 200."
+
+          # Every service runs again, and every one-shot job ended with 0.
+          problems=()
+          while IFS='|' read -r service state exit_code; do
+            case $service in
+              '' | processor) ;;
+              postgres-provision | *-migrate) [[ "$state" == exited && "$exit_code" == 0 ]] || problems+=("$service: $state (exit $exit_code)") ;;
+              *) [[ "$state" == running ]] || problems+=("$service: $state") ;;
+            esac
+          done < <(docker compose ps --all --format '{{.Service}}|{{.State}}|{{.ExitCode}}')
+          ((${#problems[@]} == 0)) || fail "Not running after the restore: ${problems[*]}"
+          echo "- \`./setup.sh restore --yes\` brought back backup $BACKUP_ID (a changed Task, a removed photo; a later Task gone) after backing up first ($first); every service runs again." >>"$GITHUB_STEP_SUMMARY"
 
       # The Status page's checks (GET /api/status): none may be a problem.
       # Before modules, the processing check stays one without an AI
