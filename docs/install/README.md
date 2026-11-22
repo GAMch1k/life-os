@@ -105,6 +105,7 @@ The phone and watch apps are on their own page: [Phone and watch apps](phone-app
 | `./setup.sh` | First-time setup: checks, questions, `.env`, integrations. |
 | `./setup.sh up` | Starts Life OS (downloading missing images), waits until it answers, prints the address. |
 | `./setup.sh update` | Backs up, downloads this release's images, restarts. Download a newer release's files first: [Updating](updating.md). |
+| `./setup.sh restore [list\|DAY\|BACKUP]` | Lists the backups, or puts Life OS back as one has it, after backing up what it holds now ([Restore](backups.md#restore)). |
 | `./setup.sh status` | What runs, and which modules are on and set up. Never prints a secret. |
 | `./setup.sh modules [on\|off ID...]` | Lists the optional modules, or turns them on or off ([Modules](modules.md)). |
 | `./setup.sh check` | Only checks the server. |
