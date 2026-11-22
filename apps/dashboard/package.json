@@ -12,6 +12,7 @@
     "test": "node --import tsx --test 'src/**/*.test.ts'",
     "test:e2e": "playwright test",
     "test:sign-in": "playwright test --config playwright.sign-in.config.ts",
+    "screenshots": "playwright test --config playwright.screenshots.config.ts",
     "generate:api": "../../tools/generate-typescript-api",
     "typecheck": "next typegen && tsc --noEmit",
     "check": "npm run format:check && npm run lint && npm run test && npm run typecheck && npm run build"

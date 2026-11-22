@@ -90,7 +90,7 @@ The gateway serves Life OS only for an explicit list of hosts, the `server_name`
 | `LIFE_OS_PUBLIC_HOSTNAME`      | the public hostname (empty: none), such as `lifeos.example.com` through Cloudflare Access and the tunnel, or your reverse proxy's hostname; the host of `LIFE_OS_PUBLIC_URL`     |
 | `LIFE_OS_GATEWAY_BIND_ADDRESS` | the address the gateway publishes on (default `127.0.0.1`), such as a WireGuard address (`http://10.8.0.1:3000`), for peers and for maintenance on the host                       |
 | `127.0.0.1`                    | the default loopback bind (`127.0.0.1:3000`), the verification stack (`127.0.0.1:13001`) with its smokes and browser tests, and smokes that ask Compose for the published address |
-| `localhost`                    | the same, by name (`http://localhost:3000` in the README)                                                                                                                         |
+| `localhost`                    | the same, by name (`http://localhost:3000`)                                                                                                                                       |
 
 `infra/nginx/server-names.envsh`, which the image's entrypoint sources just before it renders the template, leaves out a setting that repeats one of the fixed names (the default bind address `127.0.0.1`, for example), which nginx would warn about.
 
