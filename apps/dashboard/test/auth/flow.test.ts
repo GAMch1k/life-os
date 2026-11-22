@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
 
 import { getMigrations } from "better-auth/db/migration";
+import { Client } from "pg";
 import { verifyPassword as betterAuthVerify } from "better-auth/crypto";
 
 import { FIRST_SPACE_ID, FIRST_USER_ID } from "../../src/lib/auth/constants";
@@ -1039,6 +1040,79 @@ describe("rate limits", { skip }, () => {
       (await signIn(w.browser(PUBLIC_URL, "203.0.113.21"), "owner")).status,
       200,
     );
+  });
+
+  test("failures from many addresses slow the account down, but never a browser that signed in before", async () => {
+    // A browser that signed in before has the known-device cookie.
+    const known = w.browser(PUBLIC_URL, "203.0.113.30");
+    let r = await signIn(known, "owner");
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.ok(
+      known.jar.has("__Host-lifeos.known"),
+      [...known.jar.keys()].join(),
+    );
+    assert.ok(
+      r.headers
+        .getSetCookie()
+        .some((c) =>
+          /^__Host-lifeos\.known=.+; Max-Age=\d+.*; Secure/i.test(c),
+        ),
+      r.headers.getSetCookie().join(" | "),
+    );
+    const failures = async (first: number) => {
+      // Ten failures, one from each address: no address waits on its own.
+      for (let i = 0; i < 10; i += 1) {
+        const failed = await signIn(
+          w.browser(PUBLIC_URL, `198.51.100.${first + i}`),
+          "owner",
+          "wrong password 123",
+        );
+        assert.equal(failed.status, 401, JSON.stringify(failed.data));
+      }
+    };
+    await failures(100);
+    // A new browser waits, the right password included.
+    r = await signIn(w.browser(PUBLIC_URL, "192.0.2.50"), "owner");
+    assert.equal(r.status, 429, JSON.stringify(r.data));
+    assert.equal(r.data.code, "TOO_MANY_FAILED_SIGN_INS_FOR_ACCOUNT");
+    // The security log notes it once, for the account.
+    const { rows: slowed } = await sql(
+      w.db.url,
+      "SELECT outcome, subject_user_id, detail FROM security_events WHERE kind = 'sign_in_slowed'",
+    );
+    assert.deepEqual(slowed, [
+      {
+        outcome: "refused",
+        subject_user_id: FIRST_USER_ID,
+        detail: "failures:10",
+      },
+    ]);
+    // The browser that signed in before is not held back.
+    r = await signIn(known, "owner");
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+
+    // A password set with a reset link ends the delay too.
+    await failures(120);
+    assert.equal(
+      (await signIn(w.browser(PUBLIC_URL, "192.0.2.51"), "owner")).status,
+      429,
+    );
+    const client = new Client({ connectionString: w.db.url });
+    await client.connect();
+    let recovered: { link: string } | null;
+    try {
+      recovered = await cli.recoverOwner(client, PUBLIC_URL);
+    } finally {
+      await client.end();
+    }
+    const token = recovered!.link.split("/reset/")[1];
+    r = await w.browser().req("/api/auth/reset-password", {
+      method: "POST",
+      body: { token, newPassword: password },
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    r = await signIn(w.browser(PUBLIC_URL, "192.0.2.52"), "owner");
+    assert.equal(r.status, 200, JSON.stringify(r.data));
   });
 });
 

@@ -66,6 +66,9 @@ case $1 in
       'config --images') printf 'ghcr.io/gamch1k/life-os-tasks:preview\nbinwiederhier/ntfy:v2.37.2@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7\n' ;;
       'ps -q --status running backup') [[ ${STUB_BACKUP_RUNNING:-1} != 1 ]] || echo 3f1c0ffee ;;
       'ps -q --status running dashboard') [[ ${STUB_DASHBOARD_RUNNING:-1} != 1 ]] || echo d45hb0a2d ;;
+      # The connector runs while STUB_CONNECTOR names its configuration.
+      'ps -q --status running cloudflared') [[ -z ${STUB_CONNECTOR:-} ]] || echo c10udf1a2ed ;;
+      'ps -q --status running gateway') echo 9a7e3a1 ;;
       'ps --services --status running')
         # shellcheck disable=SC2086 # one service a word
         printf '%s\n' ${STUB_RUNNING:-postgres tasks inbox dashboard gateway voice}
@@ -182,7 +185,15 @@ case $1 in
     ;;
   # Docker's architecture (docker version --format '{{.Server.Arch}}').
   version) echo "${STUB_DOCKER_ARCH:-amd64}" ;;
+  # The gateway container's image (docker inspect --format '{{.Image}}').
+  inspect) echo sha256:9a7e3a1image ;;
   run)
+    # The connector's configuration (wget in its network namespace): the
+    # file STUB_CONNECTOR names.
+    if [[ $* == *'--entrypoint wget'* ]]; then
+      cat "$STUB_CONNECTOR"
+      exit
+    fi
     # ntfy's `user hash`: a bcrypt-shaped hash of what it reads.
     cat >/dev/null
     echo 'password: '
@@ -1030,6 +1041,30 @@ ok 'the https address' test "$(value LIFE_OS_PUBLIC_URL)" = https://lifeos.examp
 ok 'the hostname' test "$(value LIFE_OS_PUBLIC_HOSTNAME)" = lifeos.example.org
 run LIFE_OS_PUBLIC_URL=https://lifeos.example.org LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN="$token" -- --yes cloudflare
 ok 'cloudflare again keeps one profile entry' test "$(value COMPOSE_PROFILES | tr , '\n' | grep -cx cloudflare)" = 1
+ok 'cloudflare names Access JWT validation as required' output_has 'Enforce Access JSON Web Token'
+
+# status asks the running connector whether its route checks Access's
+# token (its configuration as cloudflared serves it, made up here).
+connector_config() { # <file> <required> <audTag JSON>
+  printf '{"version":3,"config":{"ingress":[{"hostname":"lifeos.example.org","path":null,"service":"http://gateway:80","originRequest":{"access":{%s"teamName":"team","audTag":%s}}},{"hostname":"ntfy.example.org","service":"http://ntfy:80","originRequest":{}},{"service":"http_status:404","originRequest":{}}],"warp-routing":{},"originRequest":{}}}\n' \
+    "$([[ $2 == true ]] && printf '"required":true,')" "$3" >"$1"
+}
+connector_config "$work/connector-on.json" true '["aud1"]'
+run STUB_CONNECTOR="$work/connector-on.json" -- status
+ok 'status: the connector checks the token' grep -qE 'Access token at the connector +checked: the route for lifeos.example.org enforces it' "$case_dir.last"
+ok 'read in its network namespace, without privileges' logged 'docker run --rm --network container:c10udf1a2ed --user 65534:65534 --read-only --cap-drop ALL --security-opt no-new-privileges:true --entrypoint wget sha256:9a7e3a1image -q -T 10 -O - http://127.0.0.1:20241/config'
+connector_config "$work/connector-off.json" false '["aud1"]'
+run STUB_CONNECTOR="$work/connector-off.json" -- status
+ok 'status: a route without JWT validation' grep -qE 'Access token at the connector +NOT checked' "$case_dir.last"
+ok 'warns how to turn it on' output_has 'turn on Enforce Access JSON Web Token (JWT) validation'
+connector_config "$work/connector-noaud.json" true '[]'
+run STUB_CONNECTOR="$work/connector-noaud.json" -- status
+ok 'status: required without an application is not enough' grep -qE 'Access token at the connector +NOT checked' "$case_dir.last"
+sed 's/lifeos\.example\.org/other.example.org/' "$work/connector-on.json" >"$work/connector-elsewhere.json"
+run STUB_CONNECTOR="$work/connector-elsewhere.json" -- status
+ok 'status: no route for the hostname' output_has '(no route for that hostname)'
+run -- status
+ok 'status: the connector not running' grep -qE 'Access token at the connector +unknown \(the connector or the gateway is not running\)' "$case_dir.last"
 
 run LIFE_OS_NTFY_PUBLIC_URL=https://lifeos.example.org LIFE_OS_SETUP_NTFY_PHONE_PASSWORD=correct-horse-battery -- --yes ntfy
 ok "ntfy refuses Life OS's own hostname" test "$status" -eq 2

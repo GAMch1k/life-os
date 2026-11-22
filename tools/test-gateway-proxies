@@ -261,6 +261,22 @@ codes=$(docker exec "$name-on-proxy" curl --silent --output /dev/null --write-ou
 grep -qx 429 <<<"$codes" || fail "30 sign-in requests from one client got no 429: $(sort <<<"$codes" | uniq -c | tr '\n' ' ')"
 from proxy "$on_proxy/api/auth/sign-in/username" -H 'X-Forwarded-For: 203.0.113.21'
 expect_body 'ip=[203.0.113.21]'
+printf '==> ... and an IPv6 client by its /64\n'
+# 15 quick requests each from two addresses of one /64 run into it
+# together; a client of the next /64 does not.
+sign_in_codes() { # <client address> <count>
+  local -a urls=()
+  for _ in $(seq 1 "$2"); do urls+=("$on_proxy/api/auth/sign-in/username"); done
+  docker exec "$name-on-proxy" curl --silent --output /dev/null --write-out '%{http_code}\n' \
+    -H 'Host: lifeos.example.com' -H "X-Forwarded-For: $1" "${urls[@]}"
+}
+sleep 1
+codes=$(sign_in_codes 2001:db8:a:1::10 15)
+! grep -qx 429 <<<"$codes" || fail "15 sign-in requests from one IPv6 client got a 429: $(sort <<<"$codes" | uniq -c | tr '\n' ' ')"
+codes=$(sign_in_codes 2001:db8:a:1:ffff::20 15)
+grep -qx 429 <<<"$codes" || fail "another address of the same /64 is not counted with the first: $(sort <<<"$codes" | uniq -c | tr '\n' ' ')"
+from proxy "$on_proxy/api/auth/sign-in/username" -H 'X-Forwarded-For: 2001:db8:a:2::10'
+expect_body 'ip=[2001:db8:a:2::10]'
 
 printf '==> host: a proxy on the server itself, through the published port\n'
 start 'host'

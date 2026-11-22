@@ -64,6 +64,14 @@ const before = new WeakMap<
   { userId: string | null; sessionId?: string | null }
 >();
 
+/**
+ * Whom a reset link's request was for (/reset-password), as the before hook
+ * found it: the after hooks read it once Better Auth has deleted the token.
+ */
+export function resetPasswordUser(context: object): string | null {
+  return before.get(context)?.userId ?? null;
+}
+
 /** Endpoints whose actor is the signed-in user. */
 const SESSION_PATHS = new Set([
   "/sign-out",

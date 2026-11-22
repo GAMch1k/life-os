@@ -28,7 +28,7 @@
 # which would let far too many addresses claim to be a client, are left out
 # with a warning: the gateway still starts, and trusts less. A public network
 # wider than /24 or /48 is kept, with a warning to list the proxies alone.
-lifeos_dir=${LIFE_OS_TRUSTED_PROXIES_DIR:-/etc/nginx/lifeos}
+lifeos_dir=${LIFE_OS_TRUSTED_PROXIES_DIR:-/run/lifeos}
 lifeos_geo="# LIFE_OS_TRUSTED_PROXIES (trusted-proxies.envsh)"
 lifeos_realip=$lifeos_geo
 lifeos_trusted=

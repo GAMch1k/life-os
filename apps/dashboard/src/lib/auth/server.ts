@@ -32,6 +32,13 @@ import {
 } from "./constants";
 import type { AuthEnv } from "./env";
 import {
+  INSECURE_KNOWN_DEVICE_COOKIE,
+  isKnownDevice,
+  KNOWN_DEVICE_COOKIE,
+  KNOWN_DEVICE_MAX_AGE_SECONDS,
+  knownDeviceValue,
+} from "./known-device";
+import {
   anonymousWriteAllowed,
   isLoopbackLogin,
   isLoopbackOrigin,
@@ -44,7 +51,9 @@ import { hasSecondFactor, isFresh } from "./roles";
 import {
   beforeSecurityHook,
   isAdminAction,
+  resetPasswordUser,
   securityLogPlugin,
+  userByUsername,
 } from "./security-hooks";
 import { recordSecurityEvent } from "./security-log";
 import {
@@ -53,7 +62,7 @@ import {
   noteSetupCodeUser,
   setupCodeValid,
 } from "./store";
-import { LoginThrottle } from "./throttle";
+import { ACCOUNT_FREE_FAILURES, LoginThrottle } from "./throttle";
 
 /**
  * Better Auth inside the Dashboard (docs/architecture/multi-user.md): its
@@ -197,6 +206,17 @@ function clientAddress(headers: Headers | undefined) {
   return value.split(",")[0].trim() || "unknown";
 }
 
+/** An account's username (lowercase), by its id. */
+async function usernameOf(pool: Pool, userId: string) {
+  const { rows } = await pool
+    .query<{ username: string | null }>(
+      'SELECT username FROM "user" WHERE id = $1',
+      [userId],
+    )
+    .catch(() => ({ rows: [] as { username: string | null }[] }));
+  return rows[0]?.username ?? null;
+}
+
 function placeholderEmail() {
   return `u-${randomBytes(9).toString("hex")}@${PLACEHOLDER_EMAIL_DOMAIN}`;
 }
@@ -294,6 +314,8 @@ export function createAuth(
 ) {
   const kind = options.kind ?? "secure";
   const throttle = options.throttle ?? new LoginThrottle();
+  const knownDeviceCookie =
+    kind === "secure" ? KNOWN_DEVICE_COOKIE : INSECURE_KNOWN_DEVICE_COOKIE;
   const publicUrl = new URL(env.publicUrl);
   // Secure cookies only on the secure instance: on loopback and on an
   // allowed plain-HTTP host the browser may refuse them.
@@ -579,13 +601,29 @@ export function createAuth(
           const name = String(
             (ctx.body as Record<string, unknown> | undefined)?.username ?? "",
           );
-          const wait = throttle.waitMs(name, clientAddress(headers));
-          // Not in the security log: the failures that led here are, and an
-          // entry per refused retry would let one address flood it.
-          if (wait > 0) {
+          const { waitMs, account } = throttle.attempt(
+            name,
+            clientAddress(headers),
+            {
+              knownDevice: isKnownDevice(
+                env.secret,
+                name,
+                ctx.getCookie(knownDeviceCookie),
+              ),
+            },
+          );
+          // Not in the security log: the failures that led here are (and
+          // the moment the account's delay began), and an entry per refused
+          // retry would let one address flood it.
+          if (waitMs > 0) {
+            const seconds = Math.ceil(waitMs / 1000);
             throw new APIError("TOO_MANY_REQUESTS", {
-              code: "TOO_MANY_FAILED_SIGN_INS",
-              message: `Too many failed sign-ins. Try again in ${Math.ceil(wait / 1000)} s.`,
+              code: account
+                ? "TOO_MANY_FAILED_SIGN_INS_FOR_ACCOUNT"
+                : "TOO_MANY_FAILED_SIGN_INS",
+              message: account
+                ? `Too many failed sign-ins for this account. Try again in ${seconds} s, or sign in with a passkey or in a browser you signed in with before.`
+                : `Too many failed sign-ins. Try again in ${seconds} s.`,
             });
           }
         }
@@ -703,9 +741,47 @@ export function createAuth(
           );
           const address = clientAddress(headers);
           if (failed && (returned as APIError).statusCode === 401) {
-            throttle.failed(name, address);
+            // The account's delay begins: noted once, when the name is an
+            // account's (a typed name is never kept).
+            if (throttle.failed(name, address)) {
+              const subject = await userByUsername(pool, name);
+              if (subject) {
+                await recordSecurityEvent(pool, {
+                  kind: "sign_in_slowed",
+                  outcome: "refused",
+                  subjectUserId: subject,
+                  headers,
+                  detail: `failures:${ACCOUNT_FREE_FAILURES}`,
+                });
+              }
+            }
           }
-          if (!failed) throttle.succeeded(name, address);
+          if (!failed) {
+            throttle.succeeded(name, address);
+            // The password was right (a second factor may still follow):
+            // this browser is known to the account from now on.
+            ctx.setCookie(
+              knownDeviceCookie,
+              knownDeviceValue(env.secret, name),
+              {
+                httpOnly: true,
+                secure,
+                sameSite: "lax",
+                path: "/",
+                maxAge: KNOWN_DEVICE_MAX_AGE_SECONDS,
+              },
+            );
+          }
+        }
+
+        // A password set with a reset link (an admin's, or ./setup.sh
+        // recover-owner's) ends the account's delay after failed sign-ins.
+        if (ctx.path === "/reset-password" && !failed) {
+          const userId = resetPasswordUser(ctx.context);
+          if (userId) {
+            const username = await usernameOf(pool, userId);
+            if (username) throttle.forgetAccount(username);
+          }
         }
       }),
     },

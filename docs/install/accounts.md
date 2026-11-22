@@ -28,7 +28,17 @@ In a clone of the repository (the reference server), the same command runs in th
 
 Signing in works where the session stays private: at an `https://` address, and at `http://127.0.0.1` and `http://localhost` on the server itself, which is where an SSH tunnel ends (in every current browser, Safari too: there the session cookie has no `Secure` flag, which Safari refuses on plain HTTP; the traffic never leaves the server, or travels inside the tunnel). Two things follow at `127.0.0.1` and `localhost`. Cookies ignore ports, so other web apps you open at `127.0.0.1` or `localhost` in the same browser, on any port, receive Life OS's session cookie too: open only apps you trust there, or use Life OS at its HTTPS address. And the browser must send `Sec-Fetch-Site`, which Chromium, Firefox, and Safari 16.4 or newer do: older browsers cannot sign in or make changes there. At any other plain-HTTP address, such as a WireGuard or LAN address `http://10.8.0.1:3000`, signing in is off, because anyone on the way could read the password and the session; the login page says how to go on. To allow it anyway on such a host, run `./setup.sh gateway --allow-http-login` and then `./setup.sh up` (`./setup.sh` and `./setup.sh gateway --bind <address>` offer it for a LAN or VPN address): it lists the gateway's address, and the host of an `http://` address, in `LIFE_OS_INSECURE_LOGIN_HOSTS` in `.env` (comma-separated, such as `10.8.0.1`; by hand, recreate the Dashboard after a change). Passkeys never work there. HTTPS is better: `tailscale serve`, or a reverse proxy with a certificate ([Access it safely](access.md)).
 
-Usernames are not case-sensitive. After five wrong passwords for one username from one address, the next attempt from there waits 15 seconds, then twice as long after each further failure, up to 15 minutes; the gateway and Better Auth also limit each address. The person, signing in from elsewhere, is not slowed down.
+Usernames are not case-sensitive.
+
+### Failed sign-ins
+
+Guessing a password is made slow in three ways, all of them kept in the Dashboard's memory (a restart of the Dashboard forgets them):
+
+- **Per address:** after five wrong passwords for one username from one address, the next attempt from there waits 15 seconds, then twice as long after each further failure, up to 15 minutes. An address here is an IPv4 address, or a whole IPv6 `/64`, which one connection usually holds. The gateway and Better Auth also limit each address.
+- **Per account, from everywhere:** after ten wrong passwords for one username within an hour, from any addresses together, each further password attempt for it waits a minute, then twice as long after each further failure, up to 15 minutes. The security log notes when this begins (**Sign-ins slowed down after failed ones**). It ends an hour after the last failure, with a right password, or with a new password set through a reset link.
+- **But never for you:** a browser in which you signed in to the account with its password before is not held back by the per-account delay, so a stranger who keeps guessing cannot lock you out. Such a browser keeps a cookie that says so (`__Host-lifeos.known`, for 400 days); it proves nothing else, and the password, two-factor sign-in, and the per-address delay still apply. **Passkeys** never wait for it either.
+
+Locked out anyway, in a new browser while someone keeps guessing? Sign in with a passkey, or in a browser you used before, or on the server: `./setup.sh recover-owner` ([Locked out](#locked-out)) prints a link that sets a new password and ends the delay; restarting the Dashboard ends it too. A failed sign-in you do not recognise in the security log means someone tried your password: change it, and turn on two-factor sign-in if it is off.
 
 ## Settings → Security
 
@@ -108,7 +118,7 @@ Before accounts, whoever reached Life OS was its owner. **Legacy access** keeps 
 
 ## Locked out
 
-- **Forgot the password:** on the server, `./setup.sh recover-owner` prints a one-time link to set a new one (`https://…/reset/<code>`). It works once, for 24 hours, and signs out every session of the account, its paired phones and watches, its API tokens, and its connected apps: pair them again afterwards.
+- **Forgot the password:** on the server, `./setup.sh recover-owner` prints a one-time link to set a new one (`https://…/reset/<code>`). It works once, for 24 hours, and signs out every session of the account, its paired phones and watches, its API tokens, and its connected apps: pair them again afterwards. Setting the new password also ends the account's delay after [failed sign-ins](#failed-sign-ins).
 - **Lost the authenticator app and the recovery codes:** `./setup.sh recover-owner --reset-2fa` does the same and also turns two-factor off; turn it on again afterwards.
 
 ## Sign everyone out
@@ -125,7 +135,7 @@ For an emergency (a stolen laptop, a leaked database copy, anything that looks l
 | `LIFE_OS_IDENTITY_SIGNING_KEY` | The Ed25519 private key with which the Dashboard signs the short identity tokens the gateway hands the services. Only the Dashboard has it. |
 | `LIFE_OS_TRUSTED_KEYS` | The public keys the services accept tokens from: the signing key's (and during a rotation the previous one too). |
 
-The Dashboard checks the pair when it starts: it signs a test token and verifies it with `LIFE_OS_TRUSTED_KEYS`. If the trusted keys do not list the signing key, or list its `kid` with another public key, it logs `Life OS's sign-in settings are wrong: …` with the reason and answers every request with an error until `.env` is fixed and the Dashboard recreated.
+The Dashboard refuses to start with `.env.example`'s `replace-with-…` placeholder in any of the three, which anyone can read, or with a `LIFE_OS_AUTH_SECRET` shorter than 32 bytes (`setup.sh` makes 64 characters, `openssl rand -hex 32`); its log says which. A new `LIFE_OS_AUTH_SECRET` signs everyone out and voids the two-factor secrets, so set a good one before the first account. The Dashboard also checks the pair when it starts: it signs a test token and verifies it with `LIFE_OS_TRUSTED_KEYS`. If the trusted keys do not list the signing key, or list its `kid` with another public key, it logs `Life OS's sign-in settings are wrong: …` with the reason and answers every request with an error until `.env` is fixed and the Dashboard recreated.
 
 `./setup.sh rotate-keys` makes a new signing key: the services trust the new and the current key first, then the Dashboard signs with the new one; the older key is dropped at the next rotation. Rotate after a suspected leak; there is no schedule. In a clone of the repository it prints the two `docker compose` commands to run instead.
 

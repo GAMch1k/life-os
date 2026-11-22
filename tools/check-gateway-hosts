@@ -212,7 +212,7 @@ grep -q -E '^[[:space:]]+internal;' <<<"$check_block" || fail "location = /inter
 # the address already resolved.
 realip=$(of "$lifeos_server" | grep -E '^(set_real_ip_from|real_ip_header|real_ip_recursive) ' | sort -u || true)
 [ "$realip" = $'real_ip_header CF-Connecting-IP\nset_real_ip_from 10.255.249.0/29' ] ||
-  fail "the Life OS server may believe only Cloudflare's header from the edge network (real_ip_header CF-Connecting-IP; set_real_ip_from 10.255.249.0/29); trusted proxies come from include /etc/nginx/lifeos/trusted-proxies.conf; found: ${realip//$'\n'/; }"
+  fail "the Life OS server may believe only Cloudflare's header from the edge network (real_ip_header CF-Connecting-IP; set_real_ip_from 10.255.249.0/29); trusted proxies come from include /run/lifeos/trusted-proxies.conf; found: ${realip//$'\n'/; }"
 without_realip=$(awk -v q="'" '
   {
     line = $0
@@ -232,7 +232,7 @@ without_realip=$(awk -v q="'" '
         where[depth] = d
         included[depth] = 0
       } else if (c == ";") {
-        if (d == "include /etc/nginx/lifeos/trusted-proxies.conf") included[depth] = 1
+        if (d == "include /run/lifeos/trusted-proxies.conf") included[depth] = 1
       } else if (c == "}") {
         if (depth == 2 && where[1] == "server" && where[2] ~ /^location / && where[2] !~ /^location @/ && !included[2]) print where[2]
         depth--
@@ -241,9 +241,9 @@ without_realip=$(awk -v q="'" '
     current = current " "
   }
 ' <<<"$config")
-[ -z "$without_realip" ] || fail "every location of Life OS must include /etc/nginx/lifeos/trusted-proxies.conf (the trusted proxies' client address): ${without_realip//$'\n'/; }"
-grep -q -E '^[[:space:]]+include /etc/nginx/lifeos/trusted-proxies\.geo;' <<<"$(awk '/^geo \$realip_remote_addr \$via_trusted_proxy \{/,/^\}/' <<<"$config")" ||
-  fail "the trusted proxies' geo (\$via_trusted_proxy, for X-Forwarded-Proto) must include /etc/nginx/lifeos/trusted-proxies.geo"
+[ -z "$without_realip" ] || fail "every location of Life OS must include /run/lifeos/trusted-proxies.conf (the trusted proxies' client address): ${without_realip//$'\n'/; }"
+grep -q -E '^[[:space:]]+include /run/lifeos/trusted-proxies\.geo;' <<<"$(awk '/^geo \$realip_remote_addr \$via_trusted_proxy \{/,/^\}/' <<<"$config")" ||
+  fail "the trusted proxies' geo (\$via_trusted_proxy, for X-Forwarded-Proto) must include /run/lifeos/trusted-proxies.geo"
 
 # shellcheck disable=SC2001 # comments go from every line
 ntfy_refs=$(sed 's/#.*//' <<<"$config" | grep -i 'ntfy' | sed 's/^[[:space:]]*//' || true)

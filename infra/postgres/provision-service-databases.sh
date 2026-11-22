@@ -23,6 +23,36 @@ psql_admin=(
   --no-psqlrc
 )
 
+# shellcheck source=infra/postgres/password-check.sh
+. "$(dirname "${BASH_SOURCE[0]}")/password-check.sh"
+
+# Whether a login exists: 1 or 0.
+role_exists() {
+  "${psql_admin[@]}" --quiet --tuples-only --no-align --set=role_name="$1" <<'SQL'
+SELECT count(*) FROM pg_roles WHERE rolname = :'role_name';
+SQL
+}
+
+# The admin's password (LIFE_OS_POSTGRES_PASSWORD, which compose.yaml passes
+# as PGPASSWORD). PostgreSQL keeps the one it was first started with, so a
+# weak one is refused only on a new install, before provisioning made any
+# service's login, when starting over loses nothing; after that it is a
+# warning at every start.
+if [[ -n "${PGPASSWORD:-}" ]] && [[ -n "$(weak_password "$PGPASSWORD")" ]]; then
+  registry_roles=$(awk -F '|' '!/^[[:space:]]*(#|$)/ { printf "%s%s", sep, $3; sep = "," }' "$config_file")
+  provisioned=$("${psql_admin[@]}" --quiet --tuples-only --no-align --set=roles="$registry_roles" <<'SQL'
+SELECT count(*) FROM pg_roles WHERE rolname = ANY (string_to_array(:'roles', ','));
+SQL
+)
+  if [[ "$provisioned" == 0 ]]; then
+    printf 'LIFE_OS_POSTGRES_PASSWORD %s. PostgreSQL keeps the admin password it first started with, so on this new install: set a new one in .env (openssl rand -hex 24), remove the new, empty database volume (docker compose down, then docker volume rm lifeos-postgres-data), and start again (docs/install/manual.md#database-passwords).\n' \
+      "$(weak_password "$PGPASSWORD")" >&2
+    exit 1
+  fi
+  printf 'warning: LIFE_OS_POSTGRES_PASSWORD %s. Change the admin password in PostgreSQL first, then in .env (docs/install/manual.md#database-passwords).\n' \
+    "$(weak_password "$PGPASSWORD")" >&2
+fi
+
 provision_service() {
   local service=$1
   local database=$2
@@ -44,6 +74,7 @@ provision_service() {
     printf 'set non-empty %s in the local .env file for service %s (compose.yaml passes it to postgres-provision)\n' "$password_env" "$service" >&2
     exit 1
   fi
+  check_password "$password_env" "$password" "$role" "$(role_exists "$role")"
 
   printf 'Provisioning %s (%s owned by %s)\n' "$service" "$database" "$role"
 

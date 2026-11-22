@@ -84,6 +84,11 @@ services:
     networks:
       - backend
     restart: 'no'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   finance:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-finance:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -104,6 +109,13 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   tasks-migrate:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-migrate:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -119,6 +131,11 @@ services:
     networks:
       - backend
     restart: 'no'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   tasks:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-tasks:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -143,6 +160,13 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   food-migrate:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-migrate:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -158,6 +182,11 @@ services:
     networks:
       - backend
     restart: 'no'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   food:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-food:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -178,6 +207,13 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   inbox-migrate:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-migrate:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -193,6 +229,11 @@ services:
     networks:
       - backend
     restart: 'no'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   inbox:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-inbox:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -215,6 +256,13 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   calendar-migrate:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-migrate:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -230,6 +278,11 @@ services:
     networks:
       - backend
     restart: 'no'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   calendar:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-calendar:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -249,6 +302,13 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   calendar-feeds-migrate:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-migrate:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -264,6 +324,11 @@ services:
     networks:
       - backend
     restart: 'no'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   calendar-feeds:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-calendar-feeds:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -287,6 +352,13 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   recipe-import:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-recipe-import:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -301,6 +373,13 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   activity-migrate:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-migrate:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -316,6 +395,11 @@ services:
     networks:
       - backend
     restart: 'no'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   activity:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-activity:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -332,6 +416,13 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   notifications-migrate:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-migrate:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -347,6 +438,11 @@ services:
     networks:
       - backend
     restart: 'no'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   notifications:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-notifications:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -373,6 +469,13 @@ services:
       - backend
       - notify-internal
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   banking-migrate:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-migrate:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -390,6 +493,11 @@ services:
     networks:
       - backend
     restart: 'no'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   banking:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-banking:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -448,6 +556,11 @@ services:
     networks:
       - backend
     restart: 'no'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   google-calendar:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-google-calendar:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -497,6 +610,11 @@ services:
     networks:
       - backend
     restart: 'no'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   dashboard:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-dashboard:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -543,6 +661,14 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache:uid=1000,gid=1000,mode=0755
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     mem_limit: 512m
     healthcheck:
       test:
@@ -575,6 +701,13 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   backup:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-backup:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -739,6 +872,13 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   processor:
     image: ${LIFE_OS_PROCESSOR_IMAGE:-${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-processor:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}}
@@ -838,6 +978,10 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     cpus: ${LIFE_OS_WHISPER_CPUS:-2.0}
     mem_limit: ${LIFE_OS_WHISPER_MEMORY:-2g}
     healthcheck:
@@ -869,6 +1013,11 @@ services:
     networks:
       - backend
     restart: 'no'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   voice:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-voice:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -893,6 +1042,13 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   voice-worker:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-voice:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -924,6 +1080,13 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   gateway:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-gateway:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
@@ -965,6 +1128,19 @@ services:
         aliases:
           - lifeos-gateway
     restart: unless-stopped
+    user: 101:101
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: '0'
+    read_only: true
+    tmpfs:
+      - /etc/nginx/conf.d:uid=101,gid=101,mode=0755
+      - /run:uid=101,gid=101,mode=0755
+      - /var/cache/nginx:uid=101,gid=101,mode=0700,size=512m
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   ntfy:
     image: ${LIFE_OS_NTFY_IMAGE:-binwiederhier/ntfy:v2.37.2@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7}

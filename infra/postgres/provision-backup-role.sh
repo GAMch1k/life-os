@@ -48,6 +48,9 @@ SQL
 )
 
 if [[ -n "$password" ]]; then
+  # shellcheck source=infra/postgres/password-check.sh
+  . "$(dirname "${BASH_SOURCE[0]}")/password-check.sh"
+  check_password LIFE_OS_BACKUP_DB_PASSWORD "$password" "$role" "$role_exists"
   printf 'Provisioning %s\n' "$role"
   "${psql_admin[@]}" --set=role_name="$role" --set=role_password="$password" <<'SQL'
 SELECT format(

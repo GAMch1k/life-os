@@ -659,7 +659,9 @@ jobs:
             -d '{"title":"Restore check: changed"}' "$GATEWAY/api/tasks/v1/tasks/$RESTORE_TASK"
           lost=$(curl -fsS "${api_auth[@]}" "${actor[@]}" -H 'content-type: application/json' \
             -d '{"title":"Restore check: lost"}' "$GATEWAY/api/tasks/v1/tasks" | jq -r .id)
-          docker compose run --rm --no-deps -T --user 0:0 --entrypoint rm inbox "/var/lib/lifeos/inbox-media/$RESTORE_PHOTO"
+          # As root, which Inbox's container (without capabilities from
+          # P22-08c on) needs DAC_OVERRIDE for, in the volume's directory.
+          docker compose run --rm --no-deps -T --user 0:0 --cap-add DAC_OVERRIDE --entrypoint rm inbox "/var/lib/lifeos/inbox-media/$RESTORE_PHOTO"
           [[ "$(title "$RESTORE_TASK")" == 'Restore check: changed' ]] || fail "The Task did not change after the backup."
           [[ "$(photo_code)" != 200 ]] || fail "The photo is still there after it was removed from the volume."
 
