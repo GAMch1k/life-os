@@ -57,7 +57,7 @@ Instead of Codex, the processor can run Anthropic's **Claude Code**, signed in w
 Life OS's published images do not contain Claude Code. `./setup.sh claude` downloads it onto your server and adds it to a local copy of the processor image:
 
 - **From where:** Anthropic's official npm package, [`@anthropic-ai/claude-code`](https://www.npmjs.com/package/@anthropic-ai/claude-code), from the npm registry. `npm ci` installs exactly the version this release pins and checks each download against the sha512 the release records (`services/mcp/claude-code/package-lock.json`); the package's own installer then picks the native build for your server (Linux, musl).
-- **What:** only Claude Code's native binary goes into the image, unmodified, as `/usr/local/bin/claude`. It is about 330 MB (311 MiB) unpacked on amd64, so the local image is that much bigger than the published one. npm itself does not stay in the image.
+- **What:** only Claude Code's native binary goes into the image, unmodified, as `/usr/local/bin/claude`. It is about 330 MB (311 MiB) unpacked on amd64 and 350 MB (330 MiB) on arm64, so the local image is that much bigger than the published one. npm itself does not stay in the image.
 - **Where it goes:** a local image, `lifeos-processor-claude:<version>`, built `FROM` the release's own processor image of your version (by its digest), with Codex still in it. `.env` gets `LIFE_OS_PROCESSOR_IMAGE` pointing at it, and the release's `compose.yaml` runs that image for the processor instead of the published one.
 - It needs the internet for the npm registry (and the release image, if this server does not have it yet), and about 0.5 GB of free disk while it builds.
 

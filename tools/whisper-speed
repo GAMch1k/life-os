@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# How fast Whisper transcribes on this machine, as a rough reference
+# (docs/install/voice.md#cpu-and-memory). It runs the Whisper image's own
+# whisper-cli as the Whisper service does (services/voice/whisper/server.py:
+# its arguments, language auto, as many CPUs as threads) on whisper.cpp's
+# sample recording, jfk.wav (11 s), and on that recording four times over
+# (44 s): Whisper works in 30-second windows, so a note up to 30 s takes
+# about as long as the first, and every further 30 s adds about as much
+# again. Each is run once to warm up, then --runs times; the median counts.
+# Only a throwaway container runs, without network; no Life OS container or
+# volume is touched.
+#
+#   tools/whisper-speed [--image IMAGE] [--models-dir DIR] [--threads "2 4"] [--runs N] [--env NAME=VALUE] [MODEL…]
+#
+# IMAGE is lifeos-whisper (built here) by default, or a release's, such as
+# ghcr.io/gamch1k/life-os-whisper:v0.1.0-preview.7 (pulled if missing).
+# MODEL is a whisper.cpp model name (tiny, base, small, medium,
+# large-v3-turbo); small, Life OS's default, if none is named. DIR holds the
+# models as ggml-<model>.bin; a missing one is downloaded into it from
+# Hugging Face (default: ${TMPDIR:-/tmp}/lifeos-whisper-models). --threads
+# lists the thread counts to try (default 2, LIFE_OS_WHISPER_THREADS's
+# default); --runs defaults to 3. --env sets a variable in the container,
+# such as WHISPER_CLI_VARIANT=armv8.0, which times arm64's build for older
+# processors (services/voice/whisper/whisper-cli-arm64) on a newer one. Prints
+# a Markdown table, which also goes into $GITHUB_STEP_SUMMARY when that is
+# set.
+
+usage='usage: tools/whisper-speed [--image IMAGE] [--models-dir DIR] [--threads "2 4"] [--runs N] [--env NAME=VALUE] [MODEL…]'
+image=lifeos-whisper
+models_dir=${TMPDIR:-/tmp}/lifeos-whisper-models
+threads_list=2
+runs=3
+env_args=()
+env_text=
+while (($#)); do
+  case $1 in
+    --image) image=${2:?$usage} && shift 2 ;;
+    --models-dir) models_dir=${2:?$usage} && shift 2 ;;
+    --threads) threads_list=${2:?$usage} && shift 2 ;;
+    --runs) runs=${2:?$usage} && shift 2 ;;
+    --env) env_args+=(--env "${2:?$usage}") && env_text+=" $2" && shift 2 ;;
+    -h | --help) echo "$usage" && exit 0 ;;
+    -*) echo "$usage" >&2 && exit 2 ;;
+    *) break ;;
+  esac
+done
+models=("$@")
+((${#models[@]})) || models=(small)
+[[ $runs =~ ^[1-9][0-9]*$ ]] || { echo "whisper-speed: --runs must be a number of runs, not '$runs'" >&2; exit 2; }
+read -r -a threads_counts <<<"$threads_list"
+for threads in "${threads_counts[@]}"; do
+  [[ $threads =~ ^[1-9][0-9]*$ ]] || { echo "whisper-speed: --threads lists numbers, not '$threads'" >&2; exit 2; }
+done
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/lifeos-whisper-speed.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$models_dir"
+for model in "${models[@]}"; do
+  [[ $model =~ ^[a-z0-9.-]+$ ]] || { echo "whisper-speed: '$model' is not a model name" >&2; exit 2; }
+  file=$models_dir/ggml-$model.bin
+  [[ -s $file ]] && continue
+  echo "Downloading ggml-$model.bin into $models_dir"
+  curl -fsSL --retry 3 -o "$file.part" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$model.bin"
+  mv "$file.part" "$file"
+done
+curl -fsSL --retry 3 -o "$work/jfk.wav" https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav
+# Whisper runs as nobody.
+chmod 755 "$work" "$models_dir"
+chmod 644 "$work/jfk.wav" "$models_dir"/ggml-*.bin
+docker image inspect "$image" >/dev/null 2>&1 || docker pull --quiet "$image" >/dev/null
+
+# In the container: the 44 s recording, then each recording's runs, as
+# "<audio seconds> <median seconds>" lines; the transcript must be the
+# recording's.
+timer='
+import statistics, subprocess, sys, time, wave
+model, threads, runs = sys.argv[1], sys.argv[2], int(sys.argv[3])
+subprocess.run(["ffmpeg", "-loglevel", "error", "-stream_loop", "3", "-i", "/samples/jfk.wav", "-c", "copy", "/tmp/jfk4.wav"], check=True)
+for recording in ("/samples/jfk.wav", "/tmp/jfk4.wav"):
+    with wave.open(recording) as audio:
+        seconds = audio.getnframes() / audio.getframerate()
+    command = ["whisper-cli", "-m", model, "-l", "auto", "-f", recording, "-otxt", "-of", "/tmp/out", "-t", threads]
+    times = []
+    for run in range(runs + 1):
+        start = time.monotonic()
+        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if run:
+            times.append(time.monotonic() - start)
+    with open("/tmp/out.txt") as out:
+        if "country" not in out.read().lower():
+            sys.exit("whisper-speed: the transcript is not the recording")
+    print(f"{seconds:.0f} {statistics.median(times):.1f}")
+'
+
+cpu=$(LC_ALL=C lscpu 2>/dev/null | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)
+{
+  echo "Whisper on $(uname -m), ${cpu:-an unknown processor}, $(nproc) CPUs; image $image ($(docker image inspect --format '{{.Architecture}}' "$image"))${env_text:+, with$env_text}."
+  echo
+  echo '| Model | Threads | Recording | Time (median) | Speed |'
+  echo '| --- | --- | --- | --- | --- |'
+} | tee "$work/table.md"
+for model in "${models[@]}"; do
+  for threads in "${threads_counts[@]}"; do
+    # As many CPUs as threads (LIFE_OS_WHISPER_CPUS), at most this machine's.
+    cpus=$threads
+    ((cpus <= $(nproc))) || cpus=$(nproc)
+    results=$(docker run --rm --network none --cpus "$cpus" --memory 3g "${env_args[@]}" \
+      -v "$models_dir:/models:ro" -v "$work:/samples:ro" \
+      --entrypoint python3 "$image" -c "$timer" "/models/ggml-$model.bin" "$threads" "$runs")
+    while read -r audio taken; do
+      speed=$(awk -v a="$audio" -v t="$taken" 'BEGIN { printf "%.1f", a / t }')
+      echo "| $model | $threads | $audio s | $taken s | ${speed}× real time |"
+    done <<<"$results" | tee -a "$work/table.md"
+  done
+done
+[[ -z ${GITHUB_STEP_SUMMARY:-} ]] || cat "$work/table.md" >>"$GITHUB_STEP_SUMMARY"

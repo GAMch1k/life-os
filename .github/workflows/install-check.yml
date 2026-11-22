@@ -13,7 +13,10 @@
 # newest release), or gh workflow run install-check.yml -f version=<tag>.
 # With source (-f source=true), it installs the run's commit instead, before
 # any release: that commit's images built on the runner and its install
-# bundle served from it, then the same steps.
+# bundle served from it, then the same steps. With platform arm64
+# (-f platform=arm64), it runs on GitHub's arm64 runner, ubuntu-24.04-arm,
+# which pulls (or builds) the arm64 images: release.yml checks each platform
+# it publishes, and arm64.yml a pull request's commit.
 #
 # Releases up to v0.1.0-preview.5 have no modules: a fresh install runs
 # every module, and the AI processor restarts without a sign-in. The check
@@ -39,6 +42,11 @@ on:
         description: Install this commit instead, built on the runner (no release needed)
         type: boolean
         default: false
+      platform:
+        description: The runner's platform (arm64 runs on ubuntu-24.04-arm)
+        type: choice
+        options: [amd64, arm64]
+        default: amd64
   workflow_call:
     inputs:
       version:
@@ -49,6 +57,10 @@ on:
         description: Install the calling commit instead, built on the runner
         type: boolean
         default: false
+      platform:
+        description: The runner's platform, amd64 or arm64 (ubuntu-24.04-arm)
+        type: string
+        default: amd64
 
 permissions:
   contents: read
@@ -59,8 +71,9 @@ defaults:
 
 jobs:
   install:
-    name: Install ${{ inputs.source && 'this commit' || inputs.version || 'the newest release' }} from its release files
-    runs-on: ubuntu-24.04
+    name: Install ${{ inputs.source && 'this commit' || inputs.version || 'the newest release' }} from its release files (${{ inputs.platform || 'amd64' }})
+    # Docker pulls (or the source build makes) the runner's platform's images.
+    runs-on: ${{ inputs.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -110,11 +123,12 @@ jobs:
       # (docs/services/voice-stt.md#whisper-worker).
       - name: Show the runner
         run: |
-          echo "$(nproc) CPUs:$(grep -m 1 '^model name' /proc/cpuinfo | cut -d : -f 2-)"
+          echo "$(nproc) CPUs: $(LC_ALL=C lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)"
           echo "x86-64 extensions: $(grep -m 1 '^flags' /proc/cpuinfo | grep -ow 'avx2\|fma\|f16c\|avx512f\|avx512_vnni' | tr '\n' ' ' || true)"
+          echo "ARM extensions: $(grep -m 1 '^Features' /proc/cpuinfo | grep -ow 'asimd\|asimddp\|fphp\|asimdhp\|sve\|sve2\|i8mm' | tr '\n' ' ' || true)"
           free -h
           df -h /
-          docker version --format 'Docker {{.Server.Version}}'
+          docker version --format 'Docker {{.Server.Version}} ({{.Server.Os}}/{{.Server.Arch}})'
           docker compose version
       # Source only: what a release would publish, from this commit. The
       # images get the names the release's compose.yaml pulls, so Compose

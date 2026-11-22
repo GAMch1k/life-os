@@ -1,0 +1,148 @@
+# arm64 (docs/operations/ci.md#arm64). Every release image is published for
+# linux/arm64 too, built and tested on GitHub's arm64 runner
+# (ubuntu-24.04-arm; release.yml). This checks a pull request that changes
+# how the images are built, installed, or released on that runner first, so
+# that a release does not find out: every image built (nothing is pushed),
+# Claude Code added as ./setup.sh claude adds it on a server, Whisper's
+# speed there as a rough reference, and the install check (install-check.yml)
+# of the pull request's commit, built on an arm64 runner. CI (ci.yml) stays
+# on amd64. It needs no secret and pushes nothing anywhere.
+name: arm64
+
+on:
+  pull_request:
+    branches: [master]
+    # What builds, installs, or releases the images. The same list as push.
+    paths:
+      - "**/Dockerfile"
+      - .dockerignore
+      - compose.yaml
+      - deploy/compose.yaml
+      - .env.example
+      - setup.sh
+      - apps/dashboard/package.json
+      - apps/dashboard/package-lock.json
+      - services/mcp/claude-code/**
+      - services/voice/whisper/**
+      - tools/build-install-bundle
+      - tools/ci-env
+      - tools/lib/modules.bash
+      - tools/whisper-speed
+      - .github/actions/full-stack/**
+      - .github/workflows/arm64.yml
+      - .github/workflows/install-check.yml
+      - .github/workflows/release.yml
+  push:
+    branches: [master]
+    paths:
+      - "**/Dockerfile"
+      - .dockerignore
+      - compose.yaml
+      - deploy/compose.yaml
+      - .env.example
+      - setup.sh
+      - apps/dashboard/package.json
+      - apps/dashboard/package-lock.json
+      - services/mcp/claude-code/**
+      - services/voice/whisper/**
+      - tools/build-install-bundle
+      - tools/ci-env
+      - tools/lib/modules.bash
+      - tools/whisper-speed
+      - .github/actions/full-stack/**
+      - .github/workflows/arm64.yml
+      - .github/workflows/install-check.yml
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# As CI: a newer push to a pull request cancels its older run; every push to
+# master runs to the end.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/master' && github.run_id || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build every image (arm64, nothing pushed)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Show the runner
+        run: |
+          echo "$(nproc) CPUs: $(LC_ALL=C lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)"
+          echo "ARM extensions: $(grep -m 1 '^Features' /proc/cpuinfo | cut -d : -f 2-)"
+          free -h
+          df -h /
+          docker version --format 'Docker {{.Server.Version}} ({{.Server.Os}}/{{.Server.Arch}})'
+          docker compose version
+      # Throwaway passwords, as CI's: the build reads .env.
+      - name: Write a throwaway .env
+        run: tools/ci-env "$RUNNER_TEMP/lifeos-ci"
+      # Every module's images, as the release builds them
+      # (.github/actions/full-stack).
+      - name: Build the images
+        run: |
+          . tools/lib/modules.bash
+          profiles=$(IFS=,; printf '%s' "${module_ids[*]}")
+          COMPOSE_PROFILES=$profiles timeout --kill-after=1m 40m docker compose build --pull
+      - name: Every image is arm64
+        run: |
+          wrong=()
+          while read -r local name; do
+            arch=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$local")
+            echo "$local ($name): $arch"
+            [[ "$arch" == linux/arm64 ]] || wrong+=("$local: $arch")
+          done < <(tools/build-install-bundle --images)
+          ((${#wrong[@]} == 0)) || { echo "::error::Not linux/arm64: ${wrong[*]}"; exit 1; }
+      # As the release checks before it publishes.
+      - name: Check that the processor image has no Claude Code
+        run: |
+          if docker run --rm --network none --entrypoint sh lifeos-processor -c 'command -v claude || ls -d /usr/local/lib/node_modules/@anthropic-ai'; then
+            echo "::error::lifeos-processor contains Claude Code, which the published images must not (build it with LIFE_OS_AI_PROVIDERS=codex)."
+            exit 1
+          fi
+          codex=$(docker run --rm --network none -e HOME=/tmp --entrypoint codex lifeos-processor --version)
+          echo "lifeos-processor has no Claude Code, and has ${codex}."
+      # What ./setup.sh claude builds on a user's server
+      # (services/mcp/claude-code/Dockerfile, FROM the processor image):
+      # install.sh takes the linux-arm64-musl binary here. Only on this
+      # runner, removed with it.
+      - name: Add Claude Code, as ./setup.sh claude does
+        run: |
+          docker build --tag lifeos-processor-claude:arm64-check \
+            --build-arg LIFE_OS_PROCESSOR_BASE=lifeos-processor services/mcp/claude-code
+          claude=$(docker run --rm --network none -e HOME=/tmp --entrypoint claude lifeos-processor-claude:arm64-check --version)
+          bytes=$(docker run --rm --network none --entrypoint stat lifeos-processor-claude:arm64-check -c %s /usr/local/bin/claude)
+          echo "Claude Code ${claude} runs on arm64; its binary is $((bytes / 1000000)) MB ($((bytes / 1048576)) MiB)."
+          docker image rm lifeos-processor-claude:arm64-check >/dev/null
+      # A rough reference, not a test (docs/install/voice.md#how-fast): the
+      # default model (small) and base, with the default 2 threads and with
+      # 4, as this runner's processor picks (the ARMv8.2-A build); then base
+      # with the ARMv8.0-A build, which a Raspberry Pi 4 runs. Each fails if
+      # its transcript is wrong.
+      - name: Whisper's speed on this runner (tools/whisper-speed)
+        run: |
+          tools/whisper-speed --models-dir "$RUNNER_TEMP/whisper-models" --threads "2 4" --runs 3 small base
+          tools/whisper-speed --models-dir "$RUNNER_TEMP/whisper-models" --env WHISPER_CLI_VARIANT=armv8.0 --threads 2 --runs 1 base
+
+  # A stranger's install of this commit on an arm64 runner: its images built
+  # there, then install-check.yml's every step, voice notes included.
+  install-check:
+    name: Install check (arm64)
+    permissions:
+      contents: read
+      attestations: read
+    uses: ./.github/workflows/install-check.yml
+    with:
+      source: true
+      platform: arm64

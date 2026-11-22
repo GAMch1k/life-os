@@ -1,12 +1,13 @@
 # Releases (docs/operations/releases.md). A pushed v* tag builds every image
-# once, runs the full-stack tests against those images, and scans them with
+# once per platform (linux/amd64 and linux/arm64, each on a runner of its
+# own), runs the full-stack tests against those images, and scans them with
 # Trivy; then it publishes them as ghcr.io/gamch1k/life-os-<name>:<tag> (and
 # the moving tag: preview for a -preview.N release, latest for a stable one),
 # signs each with cosign (keyless, GitHub's OIDC token), attests its build
 # provenance and its SBOM, and creates the GitHub Release with the install
 # bundle (compose.yaml, .env.example, setup.sh, SHA256SUMS). Last, the install
 # check (install-check.yml) installs the release from those files on a clean
-# runner and runs the smokes against it.
+# runner of each platform and runs the smokes against it.
 #
 # Every other run is a dry run: it builds, tests, and scans the images and
 # assembles the bundle, and publishes, signs, and releases nothing. It runs
@@ -37,10 +38,10 @@ concurrency:
   cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 env:
-  # The images' platforms, each built and tested on a runner of its own
-  # (amd64: ubuntu-24.04, arm64: ubuntu-24.04-arm). Adding arm64 is this
-  # line: '["amd64", "arm64"]'.
-  RELEASE_PLATFORMS: '["amd64"]'
+  # The images' platforms, each built, tested, and scanned on a runner of its
+  # own (amd64: ubuntu-24.04, arm64: ubuntu-24.04-arm, natively, never
+  # emulated); every image's version is an index of them all.
+  RELEASE_PLATFORMS: '["amd64", "arm64"]'
   REGISTRY: ghcr.io/gamch1k
   # As ci.yml: Node as the Dashboard's image (node:22-alpine).
   NODE_VERSION: "22"
@@ -137,7 +138,10 @@ jobs:
   build:
     name: Build, test, and scan (${{ matrix.platform }})
     needs: plan
+    # Each platform runs to its end, even after the other failed: nothing
+    # is published unless both pass, and a dry run shows both.
     strategy:
+      fail-fast: false
       matrix:
         platform: ${{ fromJSON(needs.plan.outputs.platforms) }}
     runs-on: ${{ matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
@@ -255,6 +259,7 @@ jobs:
       attestations: write
     outputs:
       digests: ${{ steps.push.outputs.digests }}
+      platform-digests: ${{ steps.push.outputs.platform-digests }}
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       MOVING_TAG: ${{ needs.plan.outputs.moving-tag }}
@@ -281,6 +286,8 @@ jobs:
       # Each platform's tested images, loaded one platform at a time (their
       # local names are the same) and pushed as <version>-<platform>; then
       # <version> (and the moving tag) becomes the index of every platform.
+      # The attestations' subjects are each index and each platform's image
+      # in it, by their digests.
       - name: Push the images
         id: push
         run: |
@@ -302,6 +309,7 @@ jobs:
             jq -r '.[].local' <<<"$IMAGES" | xargs docker image rm --force >/dev/null
           done
           digests='{}'
+          platform_digests='{}'
           echo '| Image | Digest |' >>"$GITHUB_STEP_SUMMARY"
           echo '| --- | --- |' >>"$GITHUB_STEP_SUMMARY"
           while read -r name; do
@@ -315,8 +323,17 @@ jobs:
             digests=$(jq -c --arg name "$name" --arg digest "$digest" '. + {($name): $digest}' <<<"$digests")
             printf '%s  %s\n' "${digest#sha256:}" "$REGISTRY/$name" >>"$RUNNER_TEMP/subjects.txt"
             echo "| \`$REGISTRY/$name:$VERSION\` | \`$digest\` |" >>"$GITHUB_STEP_SUMMARY"
+            # Each platform's image, as the index lists it.
+            index=$(docker buildx imagetools inspect --raw "$REGISTRY/$name@$digest")
+            for platform in "${platforms[@]}"; do
+              platform_digest=$(jq -r --arg platform "$platform" '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $platform) | .digest] | if length == 1 then .[0] else empty end' <<<"$index")
+              [[ "$platform_digest" == sha256:* ]] || { echo "::error::${name}:${VERSION} lists no single linux/${platform} image"; exit 1; }
+              platform_digests=$(jq -c --arg name "$name" --arg platform "$platform" --arg digest "$platform_digest" '.[$name][$platform] = $digest' <<<"$platform_digests")
+              printf '%s  %s\n' "${platform_digest#sha256:}" "$REGISTRY/$name" >>"$RUNNER_TEMP/subjects.txt"
+            done
           done < <(jq -r '.[].name' <<<"$IMAGES")
           echo "digests=$digests" >>"$GITHUB_OUTPUT"
+          echo "platform-digests=$platform_digests" >>"$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/subjects.txt"
 
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
@@ -384,6 +401,13 @@ jobs:
           subject-digest: ${{ fromJSON(needs.publish.outputs.digests)[matrix.image.name] }}
           sbom-path: ${{ runner.temp }}/sboms/${{ matrix.image.local }}.cdx.json
           push-to-registry: true
+      # And to that platform's own image in the index, kept by GitHub: the
+      # attestation of one platform's digest is that platform's SBOM alone.
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ matrix.image.name }}
+          subject-digest: ${{ fromJSON(needs.publish.outputs.platform-digests)[matrix.image.name][matrix.image.platform] }}
+          sbom-path: ${{ runner.temp }}/sboms/${{ matrix.image.local }}.cdx.json
       - name: Sign out of ghcr.io
         if: always()
         run: docker logout ghcr.io
@@ -504,11 +528,11 @@ jobs:
           - **Legacy access** after an update: an install updated from before accounts keeps working without a sign-in, as before, until you turn legacy access off (Settings → Security, or \`./setup.sh legacy-access off\`).
           - **Phones, tools, and AI assistants sign in too**: the phone app (from 0.5.0) pairs with your account and gets a device key of its own, so it no longer needs Cloudflare Access; personal API tokens for scripts; and MCP clients connect with OAuth.
           - **Signing in over plain HTTP** works at \`http://127.0.0.1\` and \`localhost\` (an SSH tunnel). On a LAN or VPN address it is off unless you allow it: \`./setup.sh gateway --allow-http-login\` (the password then crosses that network unencrypted; HTTPS is better).
-          - Each optional module (AI processing, voice notes, Google Calendar, bank sync, the Cloudflare Tunnel, ntfy push, server health) runs only once it is on: \`./setup.sh modules\`. Voice notes need a processor with AVX2: \`setup.sh\` refuses to turn them on without it.
-          - The images do not contain Claude Code: the processor image has OpenAI's Codex CLI alone. To use Claude Code instead, \`./setup.sh claude\` downloads it from Anthropic's official npm package onto your server (the version this release pins, checked against its sha512; about 330 MB) and adds it to a local copy of the processor image. It signs in with your own Claude plan (the token of \`claude setup-token\`) or your own Anthropic API key (billed per use by Anthropic), under Anthropic's terms for your account; \`./setup.sh update\` adds it to each new version. See [AI processing](https://github.com/${GH_REPO}/blob/${VERSION}/docs/install/ai-processing.md#claude-code-instead-of-codex).
+          - Each optional module (AI processing, voice notes, Google Calendar, bank sync, the Cloudflare Tunnel, ntfy push, server health) runs only once it is on: \`./setup.sh modules\`. On amd64, voice notes need a processor with AVX2: \`setup.sh\` refuses to turn them on without it. Every arm64 processor runs them.
+          - The images do not contain Claude Code: the processor image has OpenAI's Codex CLI alone. To use Claude Code instead, \`./setup.sh claude\` downloads it from Anthropic's official npm package onto your server (the version this release pins, checked against its sha512; about 330 MB, 350 MB on arm64) and adds it to a local copy of the processor image. It signs in with your own Claude plan (the token of \`claude setup-token\`) or your own Anthropic API key (billed per use by Anthropic), under Anthropic's terms for your account; \`./setup.sh update\` adds it to each new version. See [AI processing](https://github.com/${GH_REPO}/blob/${VERSION}/docs/install/ai-processing.md#claude-code-instead-of-codex).
           - Voice notes download their Whisper model (about 466 MB) on their first start.
           - Server health reads the host: the Docker socket (through a read-only gateway of its own), and \`/\` and Docker's data directory, read-only. It is never on unless you turn it on.
-          - ${platforms} only.
+          - **ARM too**: every image is published for ${platforms}, so Life OS runs on a Raspberry Pi 4 or 5 with a 64-bit OS, or an ARM cloud server, as on a 64-bit x86 one ([What you need](https://github.com/${GH_REPO}/blob/${VERSION}/docs/install/README.md#raspberry-pi)). It is tested on GitHub's arm64 runners, not yet on a Pi. Voice notes are slow on a Pi, most of all a Pi 4: pick a smaller Whisper model there ([How fast](https://github.com/${GH_REPO}/blob/${VERSION}/docs/install/voice.md#how-fast)).
           EOF
           } >"$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md" >>"$GITHUB_STEP_SUMMARY"
@@ -538,13 +562,19 @@ jobs:
   # The published release, installed on a clean runner from its files alone,
   # as the install docs say, and smoke-tested (install-check.yml). A draft's
   # files are not public yet: publish it, then run Install check by hand.
+  # On a runner of each platform, which pulls that platform's images.
   install-check:
-    name: Install check
+    name: Install check (${{ matrix.platform }})
     needs: [plan, release]
     if: needs.release.outputs.draft != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.plan.outputs.platforms) }}
     permissions:
       contents: read
       attestations: read
     uses: ./.github/workflows/install-check.yml
     with:
       version: ${{ needs.plan.outputs.version }}
+      platform: ${{ matrix.platform }}

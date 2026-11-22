@@ -8,7 +8,7 @@ A Life OS release is a Git tag. Pushing it runs `.github/workflows/release.yml`,
 - **Tags are `v<major>.<minor>.<patch>`**, [Semantic Versioning](https://semver.org/) with a `v`: `v0.1.0`. A pre-release adds a suffix: the early previews are `v0.1.0-preview.1`, `v0.1.0-preview.2`, and so on. A tag that is not a version fails the run before anything is built.
 - **The image tag is the Git tag**, `v` included: `ghcr.io/gamch1k/life-os-tasks:v0.1.0-preview.1`, and `LIFE_OS_VERSION=v0.1.0-preview.1`.
 - **Moving tags.** A `-preview.N` release also moves `preview` to itself; a stable release (no suffix) moves `latest`. Other pre-releases move neither. There is no `latest` until the first stable release.
-- **Platform images.** Each version is an index of its platforms' images, each also tagged `<version>-<platform>` (`v0.1.0-preview.1-amd64`). Pull the version; the platform tags exist because the index is assembled from them.
+- **Platform images.** Each version is an index of its platforms' images, linux/amd64 and linux/arm64, each also tagged `<version>-<platform>` (`v0.1.0-preview.1-amd64`). Pull the version: Docker takes the image of its own platform. The platform tags exist because the index is assembled from them. Releases up to v0.1.0-preview.6 are amd64 only.
 
 ## The images
 
@@ -88,11 +88,11 @@ git push origin v0.1.0-preview.1
 Then watch Actions → Release. It takes about 35 minutes, and the install check about 4 more; its build, test, and scan job alone took 23.5 minutes in the dry run of 2026-11-10:
 
 1. **Plan** checks the tag, that `deploy/compose.yaml` is current, lists the images, and assembles the bundle.
-2. **Build, test, and scan**, once per platform on a runner of that platform: CI's full-stack tests (`.github/actions/full-stack`, the same steps as CI's `full-stack` job: `docker compose build`, the smokes, the browser suite), then Trivy on every image ([the vulnerability gate](#the-vulnerability-gate)) and each image's SBOM. The tested images are saved for the next job, which has the write access this one has not.
-3. **Publish and sign** loads exactly those images (it checks their IDs), pushes them, assembles each version's index and moving tag, signs every image with cosign, and attests the images' and the bundle's build provenance.
-4. **SBOM**, one job per image and platform, attests its SBOM.
+2. **Build, test, and scan**, once per platform on a runner of that platform (`ubuntu-24.04` for amd64, `ubuntu-24.04-arm` for arm64: native builds, never emulated): CI's full-stack tests (`.github/actions/full-stack`, the same steps as CI's `full-stack` job: `docker compose build`, the smokes, the browser suite), then Trivy on every image ([the vulnerability gate](#the-vulnerability-gate)) and each image's SBOM. The tested images are saved for the next job, which has the write access this one has not.
+3. **Publish and sign** loads exactly those images (it checks their IDs), pushes them, assembles each version's index and moving tag, signs every image with cosign (the index and each platform's image in it), and attests the images' and the bundle's build provenance (the index and each platform's image, by digest).
+4. **SBOM**, one job per image and platform, attests that platform's SBOM twice: to the version's index, pushed to the registry beside it, and to the platform's own image in the index, kept by GitHub.
 5. **Release** creates the GitHub Release with the bundle and notes that start with the early-preview warning.
-6. **Install check** installs the published release on a clean runner from its files alone and runs the smokes against it ([the install check](#the-install-check)). It is skipped while the release is a draft.
+6. **Install check**, once per platform, installs the published release on a clean runner of that platform from its files alone and runs the smokes against it ([the install check](#the-install-check)). It is skipped while the release is a draft.
 
 A failure before step 3 publishes nothing: fix it on `master`, delete the tag (`git push origin :refs/tags/v0.1.0-preview.1`, `git tag -d v0.1.0-preview.1`), and tag again, or leave the tag and tag the next version (`v0.1.0-preview.1` and `.2` failed this way and have no release). After step 3 the images exist; a re-run of the failed jobs (Actions → the run → Re-run failed jobs) finishes the release with the same images. A re-run runs the tag's own workflow, though, so a bug in the workflow needs a fix on `master` and the next version: `v0.1.0-preview.3` has images, unsigned, but no release.
 
@@ -110,7 +110,7 @@ The images carry `org.opencontainers.image.source`, which links each package to 
 
 `.github/workflows/install-check.yml` installs a published release as a new user would and checks that it works. The release runs it as its last step, and it runs by hand for any release, or for a commit before it is released.
 
-On a clean runner (`ubuntu-24.04`), in an empty `~/life-os`, it follows the [Quick start](../install/README.md#quick-start), steps 1 to 4, with the release's files alone: no checkout of the repository there, nothing built, every image pulled from ghcr.io. A fresh install runs the core alone ([Modules](../install/modules.md)), so that is what it checks first; then it turns one module on and off again.
+On a clean runner (`ubuntu-24.04`, or `ubuntu-24.04-arm` with `platform` arm64; the release runs it on both), in an empty `~/life-os`, it follows the [Quick start](../install/README.md#quick-start), steps 1 to 4, with the release's files alone: no checkout of the repository there, nothing built, every image pulled from ghcr.io. A fresh install runs the core alone ([Modules](../install/modules.md)), so that is what it checks first; then it turns one module on and off again.
 
 1. **Download**: `compose.yaml`, `setup.sh`, `SHA256SUMS`, and `default.env.example` saved as `.env.example`, with the docs' commands; then `sha256sum -c SHA256SUMS` and `gh attestation verify` on the three files. The directory must hold those four files and nothing else, `compose.yaml` must build nothing, and `.env.example` must name the version.
 2. **Setup**: `LIFE_OS_TIMEZONE=Europe/Berlin ./setup.sh --yes`, the docs' example of a [run without questions](../install/README.md#without-questions): every other question takes its default, and no module or integration is set up. It must print no warning; `.env` must be mode 600, name the version and the timezone, and leave `COMPOSE_PROFILES` empty: the core alone.
@@ -180,6 +180,10 @@ The fix is almost always an update: the base image's digest (Dependabot's weekly
 
 `tools/scan-images` refuses an entry without all four. An entry is never a way to ship a reachable vulnerability on time; that release waits.
 
-## Adding a platform
+## Platforms
 
-`RELEASE_PLATFORMS` in `release.yml` lists the platforms; `'["amd64", "arm64"]'` adds ARM. Each platform is built and fully tested on a runner of its own (`ubuntu-24.04-arm` for arm64), scanned, and pushed, and the version's index lists every platform. Every Dockerfile must then build on that platform, and Trivy's checksum for it is already in the workflow.
+`RELEASE_PLATFORMS` in `release.yml` lists the platforms: `'["amd64", "arm64"]'`. Each platform is built and fully tested on a runner of its own (`ubuntu-24.04`, and `ubuntu-24.04-arm` for arm64, GitHub's free ARM runner for public repositories), natively: nothing is emulated. Each is scanned, its SBOM attested, and pushed, and the version's index lists every platform. Every Dockerfile must build on each, and every base image must have both platforms: the upstream images Life OS pins (Alpine, Go, Node.js, Python, nginx, PostgreSQL, ntfy, cloudflared) all do. The processor's Codex CLI and the Claude Code that `./setup.sh claude` adds have arm64 builds of their own (Claude Code's install script picks `linux-arm64-musl`), and whisper.cpp is built for ARMv8.0-A ([Whisper](../services/voice-stt.md#whisper-worker)).
+
+A pull request that changes how the images are built or released also runs [`arm64.yml`](ci.md#arm64) on the ARM runner before any release does: every image built, and the install check of its commit.
+
+Another platform (such as 32-bit `arm/v7`) is one more entry there, a runner for it in the build job's `runs-on`, and Trivy's checksum for it. GitHub has no hosted runner for 32-bit ARM, so it is not offered.
