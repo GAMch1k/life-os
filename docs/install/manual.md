@@ -145,6 +145,23 @@ Then look at the **Status** page (`/status`): it shows what works, what is still
 
 `./setup.sh env` also writes the timezone, the currency, the gateway's address and port, `LIFE_OS_BANKING_RUNTIME_UID`, `LIFE_OS_DOCKER_GID`, `LIFE_OS_LEGACY_ACCESS=off`, and `COMPOSE_PROFILES` empty (the core alone). Every other setting in `.env.example` is optional, with the default it shows.
 
+### Database passwords
+
+Every database password must be your own, and at least 32 characters long; `./setup.sh env` makes 48 (`openssl rand -hex 24`). `.env.example`'s `replace-with-…` values are placeholders that anyone can read. At every start, `postgres-provision` refuses to make a login with a placeholder or a shorter password: it exits with an error that names the setting (never the password), and nothing that needs the database starts. The Dashboard does the same for `LIFE_OS_AUTH_SECRET` and the keys ([Keys](accounts.md#keys)).
+
+A login made before this check (by an install from before it) keeps working with the password it has, and `postgres-provision`'s log warns about it at every start. To replace such a password:
+
+- **A service's** (`LIFE_OS_*_DB_PASSWORD`): put a new one in `.env` (`openssl rand -hex 24`) and redeploy. `postgres-provision` sets it on the login, and the service and its `*-migrate` container use it from then on.
+- **The admin's** (`LIFE_OS_POSTGRES_PASSWORD`): PostgreSQL keeps the one it first started with, so change it there first, then in `.env`, then redeploy. On the server (with your `LIFE_OS_POSTGRES_USER` in place of `lifeos_admin`):
+
+  ```sh
+  new=$(openssl rand -hex 24)
+  printf "ALTER ROLE lifeos_admin PASSWORD '%s';\n" "$new" | docker exec -i lifeos-postgres-1 psql -q -U lifeos_admin -d postgres
+  echo "$new"    # into .env as LIFE_OS_POSTGRES_PASSWORD
+  ```
+
+  On a new install that has no data yet, starting over is simpler: a placeholder admin password is refused there too, before any login is made. Set a new one in `.env`, remove the stack and its new, empty database volume (`docker compose down`, then `docker volume rm lifeos-postgres-data`), and start again.
+
 ### Modules
 
 Each optional [module](modules.md) is a Compose profile of its name. To turn one on, add its id to `COMPOSE_PROFILES` (comma-separated, such as `COMPOSE_PROFILES=voice,server-health`), add the settings it needs, and redeploy: Portainer's **Update the stack**, Dockge's **Deploy**, Unraid's **Compose Up**, or `docker compose up -d`. The Dashboard and the gateway restart with the new list.

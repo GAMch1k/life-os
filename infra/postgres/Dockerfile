@@ -19,7 +19,7 @@ LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
 RUN apk upgrade --no-cache && apk add --no-cache bash postgresql18-client
 WORKDIR /opt/lifeos/postgres
 COPY --chmod=0755 provision provision-service-databases.sh provision-backup-role.sh verify-database-isolation.sh ./
-COPY --chmod=0644 service-databases.conf ./
+COPY --chmod=0644 service-databases.conf password-check.sh ./
 
 USER 65534:65534
 ENTRYPOINT ["/opt/lifeos/postgres/provision"]
