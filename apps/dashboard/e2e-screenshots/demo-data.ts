@@ -166,9 +166,13 @@ async function seedEvents(request: APIRequestContext, day: string) {
       ...extra,
     });
   const weekly = { recurrence: { frequency: "weekly", interval: 1 } };
-  for (const offset of [0, 1, 2, 3, 4]) {
-    await event(offset, "09:30", "09:45", "Team stand-up");
-  }
+  await event(0, "09:30", "09:45", "Team stand-up", {
+    recurrence: {
+      frequency: "weekly",
+      interval: 1,
+      byWeekday: ["MO", "TU", "WE", "TH", "FR"],
+    },
+  });
   await event(0, "18:30", "19:30", "Yoga class", {
     ...weekly,
     location: "Lotus Studio",
@@ -194,6 +198,7 @@ async function seedEvents(request: APIRequestContext, day: string) {
     allDay: true,
     startDate: addDays(week, 6),
     endDate: addDays(week, 6),
+    recurrence: { frequency: "yearly", interval: 1 },
   });
   await post(request, "/api/calendar/v1/events", {
     title: "Weekend trip to the lake",
