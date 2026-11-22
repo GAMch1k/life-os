@@ -37,8 +37,26 @@ Whisper refuses a code it doesn't know: it stops at its start, and `docker compo
 
 ## CPU and memory
 
-Whisper needs a processor with **AVX2** (Intel Core and Xeon since 2013, AMD since 2015; many Celeron, Pentium, and Atom chips have none). Without it, Whisper stops at every start ("Illegal instruction") and voice notes wait forever, so `./setup.sh whisper` and `./setup.sh modules on voice` refuse, a first setup leaves voice notes off, and `./setup.sh up` warns if they are on anyway; each says which processor it found (in `/proc/cpuinfo`). When it cannot tell, it turns them on and warns. Text and photo captures work without AVX2.
+On amd64, Whisper needs a processor with **AVX2** (Intel Core and Xeon since 2013, AMD since 2015; many Celeron, Pentium, and Atom chips have none). Without it, Whisper stops at every start ("Illegal instruction") and voice notes wait forever, so `./setup.sh whisper` and `./setup.sh modules on voice` refuse, a first setup leaves voice notes off, and `./setup.sh up` warns if they are on anyway; each says which processor it found (in `/proc/cpuinfo`). When it cannot tell, it turns them on and warns. Text and photo captures work without AVX2.
+
+On arm64, every processor runs Whisper. The image has two builds of it and runs the one the processor can: a fast one for processors with half-precision arithmetic and the dot product (a Raspberry Pi 5, AWS Graviton, Ampere, most ARM servers), and one for every other 64-bit ARM processor, such as a Raspberry Pi 4's, three to four times slower ([How fast](#how-fast)).
 
 Whisper uses at most 2 CPUs (`LIFE_OS_WHISPER_CPUS`, `LIFE_OS_WHISPER_THREADS`) and its memory cap, and transcribes one note at a time; more CPUs make it faster. On a small server, pick a smaller model rather than raising the memory cap.
+
+## How fast
+
+A voice note takes longer with a bigger model, a slower processor, and fewer threads. Whisper works in 30-second pieces: a 5-second note takes about as long as a 30-second one, and every further 30 seconds adds about as much again.
+
+Measured on 22 November 2026 on GitHub's runners (4 CPUs each) with `tools/whisper-speed`: an 11-second note, with the default 2 threads.
+
+| Model | amd64 (Intel Xeon 6975P-C) | arm64 (Neoverse-N2), fast build | arm64 (Neoverse-N2), Pi 4's build |
+| --- | --- | --- | --- |
+| `tiny` | 1.6 s | 1.9 s | 5.7 s |
+| `base` | 3.4 s | 3.8 s | 13.4 s |
+| `small` (the default) | 12.3 s | 13.5 s | 54.3 s |
+
+A 44-second note took a little under twice as long. With 4 threads (`LIFE_OS_WHISPER_THREADS=4` and `LIFE_OS_WHISPER_CPUS=4`), the arm64 times about halved: `small` took 7.0 s, and 27.6 s with the Pi 4's build.
+
+**A Raspberry Pi has not been measured.** Its cores are slower than the runner's, so expect longer times. This is a guess from the processors' specifications: about twice the fast build's times on a Pi 5, so half a minute for a short note with `small`; three to four times the Pi 4 build's times on a Pi 4, so several minutes with `small`. On a Pi 4, pick `base` or `tiny` (`./setup.sh whisper`). On any Pi, give Whisper all 4 cores: set `LIFE_OS_WHISPER_THREADS=4` and `LIFE_OS_WHISPER_CPUS=4` in `.env`, then run `./setup.sh up`. To time your own server from a clone of the repository, run `tools/whisper-speed --image ghcr.io/gamch1k/life-os-whisper:<version> --threads "2 4" base small`. It runs a throwaway container and does not touch a running Life OS.
 
 More: [Voice and STT](../services/voice-stt.md).

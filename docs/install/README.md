@@ -11,12 +11,22 @@ This guide installs Life OS from its published Docker images with one setup scri
 
 ## What you need
 
-- **A Linux server**, 64-bit x86 (amd64). ARM images (Raspberry Pi, ARM cloud servers) come later. Voice notes need a processor with AVX2, which Intel's Core and Xeon processors have since 2013 and AMD's since 2015, but many Celeron, Pentium, and Atom chips have not: Whisper does not run without it, so `setup.sh` leaves voice notes off there and says why.
+- **A 64-bit Linux server**: x86 (amd64), or ARM (arm64), such as a Raspberry Pi 4 or 5 or an ARM cloud server. Docker picks the images for its platform. On amd64, voice notes need a processor with AVX2, which Intel's Core and Xeon processors have since 2013 and AMD's since 2015, but many Celeron, Pentium, and Atom chips have not: Whisper does not run without it, so `setup.sh` leaves voice notes off there and says why. Every arm64 processor can run them.
+- **On a Raspberry Pi**, see [Raspberry Pi](#raspberry-pi) below: a 64-bit OS, and an SSD rather than an SD card.
 - **Memory:** 2 GB at least, 4 GB to be comfortable. Life OS uses about 0.5 GB when idle. Whisper can use up to 2 GB while it transcribes a voice note, and each AI run uses a few hundred MB.
 - **Disk:** 10 GB free. The images take about 3 GB and the Whisper model about 0.5 GB; your data and the nightly backups grow from there.
 - **Docker Engine 25 or newer with the Compose plugin** (`docker compose`, version 2.27 or newer). Install it from [docs.docker.com](https://docs.docker.com/engine/install/). The reference server runs Docker Engine 29 and Compose 5.1.
 - **A user that can run Docker** (a member of the `docker` group), plus `curl`, `openssl`, and Bash 4.4 or newer, which current Linux distributions have, and `jq` (`sudo apt install jq`), which [restoring a backup](backups.md#restore) needs: install it now, not when you need a restore.
 - **One Life OS per machine.** Every install is the same Docker Compose project, `lifeos`, with the same `lifeos-*` volumes, so a second one in another directory would take the first one over. `setup.sh` refuses `up`, `update`, and `codex` while Docker has `lifeos` containers started from another directory, and says where they are.
+
+### Raspberry Pi
+
+Life OS runs on a Raspberry Pi 4 or 5 from its arm64 images. Those are built and tested on GitHub's ARM servers, not yet on a Pi.
+
+- **A 64-bit OS**: Raspberry Pi OS (64-bit), or Ubuntu Server for the Pi. The 32-bit Raspberry Pi OS cannot run Life OS, even on a Pi 4 or 5: its Docker is 32-bit, and there are no 32-bit images. `setup.sh` checks Docker's platform and warns. Install Docker [for Debian](https://docs.docker.com/engine/install/debian/) on Raspberry Pi OS, or [for Ubuntu](https://docs.docker.com/engine/install/ubuntu/).
+- **4 GB of memory or more** for voice notes and AI processing. A 2 GB Pi runs the core.
+- **An SSD** on USB 3 (or NVMe on a Pi 5), not an SD card, for Docker's data and the backups. PostgreSQL writes all day: that is slow on an SD card and wears it out.
+- **Voice notes are slow**, most of all on a Pi 4, whose processor runs Whisper's slower build. On GitHub's ARM runner, a short note took 13.5 s with the default model, `small`, and 54 s with the Pi 4's build; a Pi is slower than that runner. On a Pi 4, pick `base` or `tiny` ([Voice notes → How fast](voice.md#how-fast)).
 
 ## Quick start
 

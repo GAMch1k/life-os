@@ -186,7 +186,7 @@ Every release image is published for linux/arm64 too ([Releases → Platforms](r
 
 | Job | What it runs |
 | --- | --- |
-| `build` | Every module's images (`docker compose build --pull`, as the release builds them), then: each is linux/arm64; the processor has the Codex CLI and no Claude Code; Claude Code installs on it as `./setup.sh claude` does on a server (its `linux-arm64-musl` binary; the image stays on the runner); and `tools/whisper-speed` with the `small` and `base` models and 2 and 4 threads, into the run's summary |
+| `build` | Every module's images (`docker compose build --pull`, as the release builds them), then: each is linux/arm64; the processor has the Codex CLI and no Claude Code; Claude Code installs on it as `./setup.sh claude` does on a server (its `linux-arm64-musl` binary; the image stays on the runner); and `tools/whisper-speed` into the run's summary: the `small` and `base` models with 2 and 4 threads on the build the runner's processor picks (ARMv8.2-A), then `base` with the ARMv8.0-A build a Raspberry Pi 4 runs ([How fast](../install/voice.md#how-fast)). A wrong transcript fails it |
 | `install-check` | The [install check](releases.md#the-install-check) of the commit on an arm64 runner (`source: true`, `platform: arm64`): its images built there, then a stranger's install from its files, the smokes, and a voice note through Whisper |
 
 The full-stack tests run on arm64 in the release, and in its dry run, which a branch that changes the release's own files starts.
