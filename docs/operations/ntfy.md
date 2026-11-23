@@ -38,7 +38,7 @@ The phone reaches ntfy through the same Cloudflare Tunnel as Life OS, on a secon
 
 ## Configuration in the repository
 
-- **Container.** The `ntfy` service in `compose.yaml`, image `binwiederhier/ntfy:v2.37.2` (pinned by digest, which Dependabot keeps current; override with `LIFE_OS_NTFY_IMAGE`), in the opt-in Compose profile `ntfy`, so a stack without the setup never starts it. Its data (message cache `cache.db`, accounts `user.db`) is in the volume `lifeos-ntfy-data` at `/var/lib/ntfy`. The health check is ntfy's `/v1/health`.
+- **Container.** The `ntfy` service in `compose.yaml`, image `binwiederhier/ntfy:v2.38.1` (pinned by digest, which Dependabot keeps current; override with `LIFE_OS_NTFY_IMAGE`), in the opt-in Compose profile `ntfy`, so a stack without the setup never starts it. Its data (message cache `cache.db`, accounts `user.db`) is in the volume `lifeos-ntfy-data` at `/var/lib/ntfy`. The health check is ntfy's `/v1/health`.
 - **Networks.** In `compose.yaml`: `notify-edge` (`lifeos-notify-edge`, `10.255.249.16/29`) holds `cloudflared` (next to `edge`) and `ntfy`; `notify-internal` (`lifeos-notify-internal`, `10.255.249.32/29`, `internal: true`) holds `ntfy` and `notifications` (next to `backend`). ntfy joins nothing else.
 - **Server settings.** ntfy's `NTFY_*` variables in `compose.yaml` (since P20-02; before, the same settings were `infra/ntfy/server.yml`, mounted read-only): `behind-proxy` with `CF-Connecting-IP`, messages cached for 12 hours (the phone catches up after being offline), deny-all access, no web app, no attachments, no upstream, and visitor limits (60-request burst refilled every 5 s, 10 subscriptions, 500 messages a day). Nothing secret is among them. Its public URL (ntfy's `base-url`) comes from `.env`: `compose.yaml` passes `LIFE_OS_NTFY_PUBLIC_URL` as `NTFY_BASE_URL`, which ntfy reads at start (it refuses a value that is not an http(s) URL).
 - **Accounts.** `compose.yaml` builds `NTFY_AUTH_USERS`, `NTFY_AUTH_ACCESS`, and `NTFY_AUTH_TOKENS` from the `.env` values below.
@@ -64,14 +64,14 @@ The phone reaches ntfy through the same Cloudflare Tunnel as Life OS, on a secon
 ```sh
 cd ~/life-os
 # The publisher's token (tk_ and 29 characters):
-docker run --rm binwiederhier/ntfy:v2.37.2 token generate
+docker run --rm binwiederhier/ntfy:v2.38.1 token generate
 # The publisher's password hash. ntfy needs a password for every user; this
 # one is random and thrown away (the service uses the token):
-openssl rand -base64 32 | sed p | docker run --rm -i binwiederhier/ntfy:v2.37.2 user hash
+openssl rand -base64 32 | sed p | docker run --rm -i binwiederhier/ntfy:v2.38.1 user hash
 # The phone's password: generate one and keep it in your password manager.
 openssl rand -base64 18
 # Its hash: type that password twice.
-docker run --rm -it binwiederhier/ntfy:v2.37.2 user hash
+docker run --rm -it binwiederhier/ntfy:v2.38.1 user hash
 ```
 
 Put them in `~/life-os/.env` (never in the repository, tickets, or chat):
