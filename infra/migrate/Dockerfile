@@ -7,7 +7,7 @@
 # vulnerabilities. go install checks the module against the Go checksum
 # database. Update MIGRATE_VERSION deliberately, as a ticket.
 # Built from the repository root (the services' migrations).
-FROM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS build
+FROM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS build
 ARG MIGRATE_VERSION=v4.20.1
 RUN CGO_ENABLED=0 GOBIN=/out go install -trimpath -ldflags="-s -w -X main.Version=${MIGRATE_VERSION}" -tags "postgres file" \
       "github.com/golang-migrate/migrate/v4/cmd/migrate@${MIGRATE_VERSION}"
