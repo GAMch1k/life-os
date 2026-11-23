@@ -982,7 +982,7 @@ services:
   # LIFE_OS_NTFY_PUBLIC_URL. The rest of its configuration is here too, as
   # ntfy's NTFY_* variables, so that no file of the repository is needed.
   ntfy:
-    image: ${LIFE_OS_NTFY_IMAGE:-binwiederhier/ntfy:v2.37.2@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7}
+    image: ${LIFE_OS_NTFY_IMAGE:-binwiederhier/ntfy:v2.38.1@sha256:038da2be5e668fee6d36a62884eea48975e1b71c29a56964e5298c1b9165a573}
     profiles: [ntfy]
     command: ["serve"]
     environment:
@@ -1049,7 +1049,7 @@ services:
   # tunnel configuration, and the token comes only from the ignored .env. See
   # docs/operations/cloudflare.md.
   cloudflared:
-    image: ${LIFE_OS_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.11.0@sha256:b94b96edf2c9c4360f8879c8580cfaa99077f19c849ec595ca2f711b27d4f344}
+    image: ${LIFE_OS_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.11.1@sha256:e613aadbc2d9511785d2e67a86b0c8ac18dd63a3f9af0d06faf04cbfdcb35f2d}
     profiles: [cloudflare]
     command: ["tunnel", "--metrics", "127.0.0.1:20241", "--management-diagnostics=false", "run"]
     environment:
