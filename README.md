@@ -98,6 +98,10 @@ For everyday use from your phone and laptop, choose a way in with HTTPS: [Access
 
 The official Life OS comes only from its code on GitHub, [github.com/GAMch1k/life-os](https://github.com/GAMch1k/life-os) with its releases (and the phone and watch apps in [github.com/GAMch1k/life-os-app](https://github.com/GAMch1k/life-os-app)), and from its container images at [ghcr.io/gamch1k](https://github.com/GAMch1k?tab=packages). Forks are welcome under the AGPL, but please don't present a fork as the official Life OS: give it a name of its own, and say what it is based on.
 
+## How it's built
+
+Life OS is one person's project, built with a lot of help from AI. Most of its code, tests and documentation were written by Claude (Anthropic's AI) in Claude Code, and the commits it wrote say so in a `Co-Authored-By: Claude` line. The maintainer decides what gets built, and runs Life OS every day on their own server. Every change, whoever wrote it, has to pass the same automated checks before it is merged (unit and integration tests, and the whole stack with a browser test suite), and GitHub's code, dependency and secret scanning watch the repository.
+
 ## Contributing and security
 
 - Bugs and ideas: [open an issue](https://github.com/GAMch1k/life-os/issues/new/choose).
