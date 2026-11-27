@@ -98,6 +98,20 @@ async function until(check: () => boolean | Promise<boolean>, what: string) {
   assert.fail(`waited in vain: ${what}`);
 }
 
+/**
+ * The last email of this kind sent since sent[from], once there is one.
+ * By kind, not sent.at(-1): an alert queued just before (email-alerts.ts)
+ * goes out in the background and may land after the email a test wants.
+ */
+async function sentSince(sent: Sent[], from: number, kind: string) {
+  let mail: Sent | undefined;
+  await until(() => {
+    mail = sent.slice(from).findLast((m) => m.kind === kind);
+    return mail !== undefined;
+  }, `the ${kind} email`);
+  return mail!;
+}
+
 /** Sends the alerts that are due, until none is left. */
 async function flushAlerts(w: World) {
   for (let i = 0; i < 5; i += 1) {
@@ -250,12 +264,16 @@ describe("the address, its verification, and forgot password", { skip }, () => {
 
   test("a link for an old address does not verify a new one", async () => {
     w.rt.emailLimiter!.clear();
+    const sentBefore = service.sent.length;
     let r = await w.owner.req("/api/account/email", {
       method: "PUT",
       body: { address: "second@example.com" },
     });
     assert.equal(r.status, 200);
-    const stale = linkIn(service.sent.at(-1), "/verify-email/");
+    // The change's alert to the old, verified address goes out meanwhile.
+    const link = await sentSince(service.sent, sentBefore, "verify_email");
+    assert.equal(link.to, "second@example.com");
+    const stale = linkIn(link, "/verify-email/");
     // The old, verified address hears of the change.
     await flushAlerts(w);
     const notice = service.sent.find(
@@ -335,9 +353,8 @@ describe("the address, its verification, and forgot password", { skip }, () => {
     });
     assert.equal(r.status, 200);
     assert.equal(r.data.minutes, 30);
-    await until(() => service.sent.length > before, "the reset email");
-    const mail = service.sent.at(-1)!;
-    assert.equal(mail.kind, "password_reset");
+    // The new token's alert may land after it.
+    const mail = await sentSince(service.sent, before, "password_reset");
     assert.equal(mail.to, "owner@example.com");
     const token = linkIn(mail, "/reset/");
     const reset = await w.browser().req("/api/auth/reset-password", {
@@ -551,6 +568,8 @@ describe("sign-in codes by email and security alerts", { skip }, () => {
     const b = w.browser();
     await signIn(b, "owner");
     w.rt.emailLimiter!.clear();
+    // This new browser's alert goes out meanwhile.
+    const sentBefore = service.sent.length;
     let sent = await b.req("/api/auth/two-factor/send-otp", {
       method: "POST",
       body: {},
@@ -558,7 +577,9 @@ describe("sign-in codes by email and security alerts", { skip }, () => {
     assert.equal(sent.status, 200, JSON.stringify(sent.data));
     sent = await b.req("/api/auth/two-factor/verify-otp", {
       method: "POST",
-      body: { code: codeIn(service.sent.at(-1)) },
+      body: {
+        code: codeIn(await sentSince(service.sent, sentBefore, "sign_in_code")),
+      },
     });
     assert.equal(sent.status, 200, JSON.stringify(sent.data));
     // A session signed in with a code may add the authenticator with the
