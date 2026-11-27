@@ -50,6 +50,12 @@ export LIFE_OS_NTFY_TOPIC=verify LIFE_OS_NTFY_PUBLISHER_TOKEN= LIFE_OS_NTFY_PUBL
 # accept pushes signed with them only, so the verification stack has none
 # (web push shows as not set up there; browser tests stub it in the page).
 export LIFE_OS_WEBPUSH_VAPID_PUBLIC_KEY= LIFE_OS_WEBPUSH_VAPID_PRIVATE_KEY= LIFE_OS_WEBPUSH_SUBJECT=
+# Nor the owner's email provider (docs/install/email.md): a test email or a
+# security alert must never reach a real mailbox. Email stays off, unless an
+# overlay points the notifications service at the stack's own Mailpit
+# (tools/fixtures/mailpit.compose.yaml, tools/smoke-email); any other SMTP
+# host, or any SMTP password, is refused below.
+export LIFE_OS_SMTP_HOST= LIFE_OS_SMTP_PORT= LIFE_OS_SMTP_TLS= LIFE_OS_SMTP_USERNAME= LIFE_OS_SMTP_SECRET= LIFE_OS_SMTP_FROM= LIFE_OS_SMTP_FROM_NAME=
 # Nor the owner's Enable Banking application, its key, or the session key:
 # the verification stack never talks to a bank (compose.verify.yaml also
 # blanks them and points banking at an address that resolves nowhere).
@@ -107,6 +113,10 @@ require_isolated_resources() {
   fi
   if jq -e '((.services.notifications.environment.NOTIFICATIONS_WEBPUSH_VAPID_PRIVATE_KEY // "") != "")' <<<"$config" >/dev/null; then
     echo "verify-compose: refusing a plan with a web push key: it could reach the owner's devices" >&2
+    exit 2
+  fi
+  if jq -e '(.services.notifications.environment // {}) | ((.NOTIFICATIONS_SMTP_HOST // "") as $host | ($host != "" and $host != "mailpit")) or ((.NOTIFICATIONS_SMTP_PASSWORD // "") != "") or ((.NOTIFICATIONS_SMTP_USERNAME // "") != "")' <<<"$config" >/dev/null; then
+    echo "verify-compose: refusing a plan with an SMTP host other than the stack's mailpit, or an SMTP user or password: a test email could reach a real mailbox" >&2
     exit 2
   fi
   if jq -e '((.services.banking.environment.LIFE_OS_ENABLE_BANKING_APP_ID // "") != "") or ((.services.banking.environment.LIFE_OS_BANKING_TOKEN_KEY // "") != "") or ([.services.banking.volumes[]? | select(.source != "/dev/null")] | length > 0)' <<<"$config" >/dev/null; then

@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Email end to end (P22-16, docs/install/email.md), on the disposable
+# verification stack only, with the real images and a throwaway SMTP catcher
+# as the provider: Mailpit (tools/fixtures/mailpit.compose.yaml, pinned by
+# digest), on the stack's private network, which publishes no port.
+# tools/verify-compose refuses any other SMTP host or an SMTP password, so
+# nothing here reaches a real mailbox. With legacy access off, as a new
+# install has it, it
+#  - sends ./setup.sh email's test email (POST /v1/email/test from the
+#    Dashboard's container) and finds it in Mailpit; /v1/email/status says
+#    ok;
+#  - makes the first account with an address from a setup code, and
+#    verifies the address with the link Mailpit received;
+#  - asks "Forgot password?" for the account and for a name nobody has (the
+#    same answer), sets a new password with the reset link, and checks that
+#    the old session is signed out and the link works once;
+#  - signs in from a new browser and finds the new-device alert and the
+#    reset's alert;
+#  - turns sign-in codes by email on, signs in with a code from Mailpit, and
+#    finds the two-factor alert;
+#  - checks that the gateway's /api/notifications/v1/email/... is refused
+#    (internal only) even with the owner's session.
+# Needs the images built (docker compose build).
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+compose=(./tools/verify-compose)
+gateway=http://127.0.0.1:13001
+export LIFE_OS_VERIFY_LEGACY_ACCESS=off
+# The core alone: email needs the Dashboard and the notifications service.
+export LIFE_OS_VERIFY_MODULES=
+export LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/mailpit.compose.yaml
+work=$(mktemp -d)
+cleanup() {
+  "${compose[@]}" down --volumes --remove-orphans >/dev/null
+  rm -rf "$work"
+}
+trap cleanup EXIT
+fail() {
+  echo "email smoke: $*" >&2
+  exit 1
+}
+# The throwaway stack's credentials never show in a CI log.
+mask() { [[ -z ${GITHUB_ACTIONS:-} || -z $1 ]] || printf '::add-mask::%s\n' "$1"; }
+body_shown() { jq -c 'if type == "object" then del(.token) else . end' "$work/body" 2>/dev/null || head -c 500 "$work/body"; }
+username=owner
+address=owner@smoke.test
+password="email smoke $(openssl rand -hex 8)"
+mask "$password"
+
+"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+"${compose[@]}" up --detach --no-build >/dev/null
+
+for _ in $(seq 1 120); do
+  curl --fail --silent --max-time 3 -o /dev/null "$gateway/login" && break
+  sleep 1
+done
+curl --fail --silent --max-time 3 -o /dev/null "$gateway/login" || fail 'the login page does not answer'
+
+# node <script> [args…] in the Dashboard's container, on the private network.
+in_dashboard() { "${compose[@]}" exec -T dashboard node -e "$@"; }
+
+# shellcheck disable=SC2016 # JavaScript, run by node
+probe='fetch("http://notifications:8080/ready").then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))'
+for _ in $(seq 1 60); do
+  in_dashboard "$probe" && break
+  sleep 1
+done
+
+# notifications <method> <path> [body]: the notifications service from the
+# Dashboard's container, as ./setup.sh does; "<status>\n<body>".
+# shellcheck disable=SC2016 # JavaScript, run by node
+notifications_script='const [method, path] = process.argv.slice(1);
+const body = require("fs").readFileSync(0, "utf8").trim();
+fetch(`http://notifications:8080${path}`, {
+  method,
+  headers: { "content-type": "application/json", "x-life-os-actor": "dev:smoke" },
+  body: body || undefined,
+}).then(async (r) => console.log(`${r.status}\n${await r.text()}`), (e) => console.log(`000\n${e.message}`));'
+notifications() { in_dashboard "$notifications_script" "$1" "$2" <<<"${3:-}"; }
+
+# mail <to> <subject prefix>: waits up to 30 s for the newest email to that
+# address whose subject starts so, and prints its subject and plain text
+# (from Mailpit's API).
+# shellcheck disable=SC2016 # JavaScript, run by node
+mail_script='const [to, prefix, after] = process.argv.slice(1);
+const api = "http://mailpit:8025/api/v1";
+const deadline = Date.now() + 30000;
+const look = async () => {
+  const list = await (await fetch(`${api}/messages?limit=100`)).json();
+  const found = list.messages.find((m) => m.Subject.startsWith(prefix) && m.To.some((t) => t.Address === to) && (!after || m.ID !== after));
+  if (found) {
+    const message = await (await fetch(`${api}/message/${found.ID}`)).json();
+    console.log(JSON.stringify({ id: found.ID, subject: message.Subject, text: message.Text, html: message.HTML, from: message.From }));
+    return;
+  }
+  if (Date.now() > deadline) process.exit(1);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  return look();
+};
+look().catch((e) => { console.error(e.message); process.exit(1); });'
+mail() { in_dashboard "$mail_script" "$@" || fail "no email to $1 starting \"$2\" in Mailpit"; }
+mails() { in_dashboard 'fetch("http://mailpit:8025/api/v1/messages?limit=100").then((r) => r.json()).then((d) => console.log(d.messages_count ?? d.total))'; }
+
+# request <jar> <method> <path> [curl options…]: a browser with its own
+# cookie jar, as smoke-accounts' (Sec-Fetch-Site same-origin, Origin the
+# gateway's); status in $code, body in $work/body.
+request() {
+  local jar=$work/$1.jar method=$2 path=$3
+  shift 3
+  code=$(curl --silent --max-time 30 --request "$method" --output "$work/body" --dump-header "$work/headers" \
+    --cookie "$jar" --cookie-jar "$jar" -H 'sec-fetch-site: same-origin' -H "origin: $gateway" \
+    --write-out '%{http_code}' "$@" "$gateway$path")
+}
+expect() { # <status> <jar> <method> <path> [curl options…]
+  local want=$1
+  shift
+  request "$@"
+  [[ "$code" == "$want" ]] || { body_shown >&2; fail "$2 $3: $code, want $want"; }
+}
+sign_in() { # <jar> <password>: a password sign-in, waiting out Better Auth's limit
+  for _ in 1 2 3; do
+    request "$1" POST /api/auth/sign-in/username -H 'content-type: application/json' \
+      --data "$(jq -n --arg u "$username" --arg p "$2" '{username: $u, password: $p}')"
+    [[ "$code" == 429 ]] || break
+    sleep 11
+  done
+  [[ "$code" == 200 ]] || { body_shown >&2; fail "signing in: $code"; }
+}
+
+echo '==> The test email, as ./setup.sh email sends it'
+out=$(notifications POST /v1/email/test '{"to":"test@smoke.test"}')
+[[ "${out%%$'\n'*}" == 204 ]] || fail "the test email: $out"
+message=$(mail test@smoke.test 'Life OS can send email')
+jq -e '.from.Address == "lifeos@smoke.test" and (.text | contains("Life OS can send email"))' <<<"$message" >/dev/null \
+  || fail "the test email: $message"
+out=$(notifications GET /v1/email/status)
+jq -e '.configured and .state == "ok" and .lastSuccessAt != null' <<<"${out#*$'\n'}" >/dev/null || fail "the status: $out"
+
+echo '==> The first account, and its address verified by email'
+setup_code=$("${compose[@]}" exec -T dashboard node scripts/lifeos-auth.mjs setup-code | sed -n 's/^Setup code: //p')
+[[ -n "$setup_code" ]] || fail 'setup-code printed no code'
+mask "$setup_code"
+expect 200 owner POST /api/auth/sign-up/email -H 'content-type: application/json' -H "x-lifeos-setup-code: $setup_code" \
+  --data "$(jq -n --arg u "$username" --arg p "$password" --arg e "$address" '{username: $u, password: $p, email: $e}')"
+expect 200 owner GET /api/account/email
+jq -e --arg a "$address" '.enabled and .address == $a and (.verified | not)' "$work/body" >/dev/null || fail "the address: $(cat "$work/body")"
+expect 202 owner POST /api/account/email/verification
+message=$(mail "$address" 'Verify your email address')
+token=$(jq -r .text <<<"$message" | sed -n 's#.*/verify-email/\([A-Za-z0-9_-]*\).*#\1#p' | head -n 1)
+[[ -n "$token" ]] || fail "no verification link: $message"
+mask "$token"
+jq -e '.html | test("<img|<script"; "i") | not' <<<"$message" >/dev/null || fail 'the email loads something'
+expect 200 anon POST /api/auth/email/verify -H 'content-type: application/json' --data "$(jq -n --arg t "$token" '{token: $t}')"
+expect 400 anon POST /api/auth/email/verify -H 'content-type: application/json' --data "$(jq -n --arg t "$token" '{token: $t}')"
+expect 200 owner GET /api/account/email
+jq -e '.verified' "$work/body" >/dev/null || fail 'the address is not verified'
+
+echo '==> Forgot password: the same answer for anyone, a link that works once'
+expect 200 anon POST /api/auth/email/forgot-password -H 'content-type: application/json' --data '{"login":"nobody"}'
+nobody=$(cat "$work/body")
+expect 200 anon POST /api/auth/email/forgot-password -H 'content-type: application/json' --data "{\"login\":\"$username\"}"
+[[ "$(cat "$work/body")" == "$nobody" ]] || fail "the answers differ: $nobody / $(cat "$work/body")"
+message=$(mail "$address" 'Set a new password')
+reset=$(jq -r .text <<<"$message" | sed -n 's#.*/reset/\([A-Za-z0-9_-]*\).*#\1#p' | head -n 1)
+[[ -n "$reset" ]] || fail "no reset link: $message"
+mask "$reset"
+new_password="$password!"
+mask "$new_password"
+expect 200 anon POST /api/auth/reset-password -H 'content-type: application/json' \
+  --data "$(jq -n --arg t "$reset" --arg p "$new_password" '{token: $t, newPassword: $p}')"
+request anon POST /api/auth/reset-password -H 'content-type: application/json' \
+  --data "$(jq -n --arg t "$reset" --arg p "$password" '{token: $t, newPassword: $p}')"
+[[ "$code" != 200 ]] || fail 'the reset link worked twice'
+expect 401 owner GET /api/account/email
+mail "$address" 'Your password was set with a reset link' >/dev/null
+
+echo '==> A new browser: the new-device alert'
+sign_in phone "$new_password"
+mail "$address" 'New sign-in from a new device' >/dev/null
+
+echo '==> Sign-in codes by email'
+expect 200 phone POST /api/account/email/sign-in-codes -H 'content-type: application/json' \
+  --data "$(jq -n --arg p "$new_password" '{enabled: true, password: $p}')"
+jq -e '.signInCodes' "$work/body" >/dev/null || fail "codes are not on: $(cat "$work/body")"
+mail "$address" 'Sign-in codes by email turned on' >/dev/null
+sign_in laptop "$new_password"
+jq -e '.twoFactorRedirect and .twoFactorMethods == ["otp"]' "$work/body" >/dev/null || fail "no code asked for: $(body_shown)"
+expect 200 laptop POST /api/auth/two-factor/send-otp -H 'content-type: application/json' --data '{}'
+message=$(mail "$address" 'Your sign-in code')
+code_sent=$(jq -r .subject <<<"$message" | grep -o '[0-9]\{6\}' | head -n 1)
+[[ -n "$code_sent" ]] || fail "no code: $(jq -r .subject <<<"$message")"
+mask "$code_sent"
+expect 200 laptop POST /api/auth/two-factor/verify-otp -H 'content-type: application/json' \
+  --data "$(jq -n --arg c "$code_sent" '{code: $c}')"
+expect 200 laptop GET /api/account/email
+
+echo '==> Email is internal to Life OS'
+expect 403 laptop POST /api/notifications/v1/email/messages -H 'content-type: application/json' -H 'x-life-os-actor: user' \
+  --data '{"to":"someone@smoke.test","subject":"x","text":"x","kind":"test"}'
+jq -e '.error.code == "internal_only"' "$work/body" >/dev/null || fail "not internal_only: $(cat "$work/body")"
+expect 403 laptop POST /api/notifications/v1/email/test -H 'content-type: application/json' -H 'x-life-os-actor: user' \
+  --data '{"to":"someone@smoke.test"}'
+in_dashboard 'fetch("http://mailpit:8025/api/v1/messages?limit=100").then((r) => r.json()).then((d) => process.exit(d.messages.some((m) => m.To.some((t) => t.Address === "someone@smoke.test")) ? 1 : 0))' \
+  || fail 'an email went out through the gateway'
+echo "Emails in Mailpit: $(mails)"
+echo 'email smoke: ok'
