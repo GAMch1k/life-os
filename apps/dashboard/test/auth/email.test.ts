@@ -114,13 +114,17 @@ function sessionToken(b: Browser) {
   return decodeURIComponent(b.jar.get("__Host-lifeos.session")!).split(".")[0];
 }
 
+/** The token after PUBLIC_URL + path in an email's text (a plain search, no regex built from the URL). */
 function linkIn(message: Sent | undefined, path: string) {
   assert.ok(message, "no email");
-  const match = message.text.match(
-    new RegExp(`${PUBLIC_URL.replace(/[.]/g, "\\.")}${path}([A-Za-z0-9_-]+)`),
+  const prefix = `${PUBLIC_URL}${path}`;
+  const start = message.text.indexOf(prefix);
+  assert.ok(start >= 0, message.text);
+  const token = /^[A-Za-z0-9_-]+/.exec(
+    message.text.slice(start + prefix.length),
   );
-  assert.ok(match, message.text);
-  return match[1];
+  assert.ok(token, message.text);
+  return token[0];
 }
 
 /** Sets and verifies the owner's address. */

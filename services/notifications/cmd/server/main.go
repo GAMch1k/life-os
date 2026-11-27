@@ -79,7 +79,14 @@ func run(ctx context.Context) error {
 	mailer := email.NewMailer(cfg.EmailSettings(), nil, queries, logger)
 	switch {
 	case mailer.Configured():
-		logger.Info("email configured", "smtp", mailer.Config().String())
+		// Only the plain fields, one by one: never the Config as a whole,
+		// which also holds the password.
+		smtp := mailer.Config()
+		user := "none"
+		if smtp.Username != "" {
+			user = "set"
+		}
+		logger.Info("email configured", "smtp_host", smtp.Host, "smtp_port", smtp.Port, "smtp_tls", string(smtp.Mode), "smtp_user", user)
 	case mailer.Problem() != "":
 		logger.Error("email is off: its settings cannot work", "problem", mailer.Problem())
 	default:
