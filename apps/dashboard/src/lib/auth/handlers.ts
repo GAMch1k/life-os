@@ -1,6 +1,7 @@
 import { type CheckRuntime, checkRequest, sessionSource } from "./check";
 import { IDENTITY_HEADER } from "./constants";
 import { devicesHandler } from "./devices-api";
+import { emailAuthRoute } from "./email-routes";
 import { routeFromGateway, suspiciousPath } from "./scopes";
 
 /**
@@ -10,11 +11,15 @@ import { routeFromGateway, suspiciousPath } from "./scopes";
 
 /** Better Auth at /api/auth/*: for the request's host, the secure one or,
  * on a plain-HTTP host the owner allowed, the insecure one. The phone
- * apps' pairing endpoints (/api/auth/devices/…) are Life OS's own. */
+ * apps' pairing endpoints (/api/auth/devices/…) and the email links'
+ * (/api/auth/email/…) are Life OS's own. */
 export function authHandler(rt: CheckRuntime, request: Request) {
   const { pathname } = new URL(request.url);
   if (pathname.startsWith("/api/auth/devices/")) {
     return devicesHandler(rt, request);
+  }
+  if (pathname.startsWith("/api/auth/email/")) {
+    return emailAuthRoute(rt, request);
   }
   return sessionSource(rt, request.headers).auth.handler(request);
 }

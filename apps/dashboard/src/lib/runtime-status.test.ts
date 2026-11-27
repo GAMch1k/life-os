@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  EMAIL_FAILING_ACTION,
   SOURCE_FAILURE_ALERT,
   formatAge,
   categoriesFacts,
@@ -914,4 +915,72 @@ test("a processor that is on but cannot be read is still a problem", () => {
     status.checks.find((entry) => entry.id === "processing")?.state,
     "problem",
   );
+});
+
+test("Notifications has an Email line: off, works, or failing since when", () => {
+  const email = (overrides: Partial<NonNullable<RuntimeSignals["email"]>>) => ({
+    configured: true,
+    state: "ok" as const,
+    problem: null,
+    lastSuccessAt: minutesAgo(5),
+    lastFailureAt: null,
+    failingSince: null,
+    lastErrorCode: null,
+    lastError: null,
+    ...overrides,
+  });
+  const part = (signals: RuntimeSignals) =>
+    check(signals, "notifications").parts?.find(
+      (entry) => entry.id === "email",
+    );
+  const base = { ...healthy, notificationChannels: [] };
+
+  const off = part({
+    ...base,
+    email: email({ configured: false, state: "off", lastSuccessAt: null }),
+  });
+  assert.equal(off?.state, "neutral");
+  assert.match(off!.summary, /^Off/);
+  assert.equal(
+    check(
+      { ...base, email: email({ configured: false, state: "off" }) },
+      "notifications",
+    ).state,
+    "neutral",
+  );
+
+  assert.equal(part({ ...base, email: email({}) })?.summary, "Works.");
+  const failing = {
+    ...base,
+    email: email({
+      state: "failing",
+      failingSince: minutesAgo(30),
+      lastFailureAt: minutesAgo(1),
+      lastErrorCode: "email_auth_failed",
+      lastError: "The mail server refused the user name or password.",
+    }),
+  };
+  const failingPart = part(failing);
+  assert.equal(failingPart?.state, "warning");
+  assert.match(failingPart!.summary, /^Failing since /);
+  assert.equal(
+    failingPart!.detail,
+    "The mail server refused the user name or password.",
+  );
+  const notifications = check(failing, "notifications");
+  assert.equal(notifications.state, "warning");
+  assert.equal(notifications.action, EMAIL_FAILING_ACTION);
+  assert.equal(
+    part({
+      ...base,
+      email: email({
+        state: "invalid",
+        configured: false,
+        problem: "LIFE_OS_SMTP_TLS must be tls, starttls, or none",
+      }),
+    })?.detail,
+    "LIFE_OS_SMTP_TLS must be tls, starttls, or none",
+  );
+  // Not read: no line.
+  assert.equal(part(base), undefined);
 });

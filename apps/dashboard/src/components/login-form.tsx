@@ -18,14 +18,15 @@ import {
   useSecureContext,
 } from "@/lib/auth/use-browser-security";
 
-type Step = "password" | "totp" | "recovery";
+type Step = "password" | "totp" | "recovery" | "email";
 
 /**
- * Sign in: username and password, then the authenticator app's code (or a
- * recovery code) when two-factor is on; or a passkey, which needs nothing
- * else. Only where signing in is safe enough: HTTPS, this machine's
- * loopback (an SSH tunnel), or a host the owner allowed over plain HTTP;
- * elsewhere it says how to get there (PlainHttpNotice).
+ * Sign in: username and password, then the authenticator app's code, a
+ * code by email (when the account turned those on, docs/install/email.md),
+ * or a recovery code when two-factor is on; or a passkey, which needs
+ * nothing else. Only where signing in is safe enough: HTTPS, this
+ * machine's loopback (an SSH tunnel), or a host the owner allowed over
+ * plain HTTP; elsewhere it says how to get there (PlainHttpNotice).
  */
 export function LoginForm({
   context,
@@ -47,6 +48,10 @@ export function LoginForm({
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState<string>();
+  // The second factors Better Auth offers this sign-in: "totp" (the
+  // authenticator app) and "otp" (a code by email).
+  const [methods, setMethods] = useState<string[]>([]);
+  const [sentTo, setSentTo] = useState(false);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
   // Known only in the browser: whether this page is a secure context, and
@@ -64,6 +69,19 @@ export function LoginForm({
   };
   const blocked = secure === false && !context.insecureAllowed;
 
+  /** Emails a sign-in code, and shows the email step. */
+  const sendCode = async () => {
+    setError(undefined);
+    setCode("");
+    setStep("email");
+    const { error } = await authClient.twoFactor.sendOtp();
+    if (error) {
+      setSentTo(false);
+      return setError(authErrorMessage(error, "Could not send a code."));
+    }
+    setSentTo(true);
+  };
+
   const signIn = (event: FormEvent) => {
     event.preventDefault();
     startTransition(async () => {
@@ -76,15 +94,30 @@ export function LoginForm({
         if (error)
           return setError(authErrorMessage(error, "Could not sign in."));
         if (data && "twoFactorRedirect" in data && data.twoFactorRedirect) {
+          const offered = (
+            "twoFactorMethods" in data && Array.isArray(data.twoFactorMethods)
+              ? data.twoFactorMethods
+              : ["totp"]
+          ) as string[];
+          setMethods(offered);
           setCode("");
-          return setStep("totp");
+          if (offered.includes("totp")) return setStep("totp");
+          if (offered.includes("otp")) return sendCode();
+          setStep("recovery");
+          return setError(
+            "Your second factor is a code by email, and Life OS cannot send email now. Use a recovery code, or ask the server's owner.",
+          );
         }
         return done();
       }
       const { error } =
         step === "totp"
           ? await authClient.twoFactor.verifyTotp({ code: code.trim() })
-          : await authClient.twoFactor.verifyBackupCode({ code: code.trim() });
+          : step === "email"
+            ? await authClient.twoFactor.verifyOtp({ code: code.trim() })
+            : await authClient.twoFactor.verifyBackupCode({
+                code: code.trim(),
+              });
       if (error) return setError(authErrorMessage(error, "Could not sign in."));
       done();
     });
@@ -102,6 +135,27 @@ export function LoginForm({
       done();
     });
 
+  const switchTo = (next: Step) => {
+    setError(undefined);
+    setCode("");
+    if (next === "email") {
+      startTransition(sendCode);
+      return;
+    }
+    setStep(next);
+  };
+  const otherWays: { step: Step; label: string }[] = [
+    ...(step !== "totp" && methods.includes("totp")
+      ? [{ step: "totp" as Step, label: "Use the authenticator app instead" }]
+      : []),
+    ...(step !== "email" && methods.includes("otp")
+      ? [{ step: "email" as Step, label: "Email me a code instead" }]
+      : []),
+    ...(step !== "recovery" && methods.includes("totp")
+      ? [{ step: "recovery" as Step, label: "Use a recovery code instead" }]
+      : []),
+  ];
+
   return (
     <AccountPage
       description={
@@ -109,7 +163,11 @@ export function LoginForm({
           ? undefined
           : step === "totp"
             ? "Enter the 6-digit code from your authenticator app."
-            : "Enter one of your recovery codes. Each works once."
+            : step === "email"
+              ? sentTo
+                ? "Life OS emailed a 6-digit code to your verified address. It works for 10 minutes."
+                : "Life OS emails a 6-digit code to your verified address."
+              : "Enter one of your recovery codes. Each works once."
       }
       title="Sign in to Life OS"
     >
@@ -146,7 +204,17 @@ export function LoginForm({
                 />
               </Field>
               <Field>
-                <FieldLabel htmlFor={`${id}-password`}>Password</FieldLabel>
+                <div className="flex items-center justify-between gap-2">
+                  <FieldLabel htmlFor={`${id}-password`}>Password</FieldLabel>
+                  {context.emailEnabled ? (
+                    <Link
+                      className="text-muted-foreground text-sm underline-offset-4 hover:underline"
+                      href="/forgot-password"
+                    >
+                      Forgot password?
+                    </Link>
+                  ) : null}
+                </div>
                 <Input
                   autoComplete="current-password"
                   disabled={blocked}
@@ -161,13 +229,13 @@ export function LoginForm({
           ) : (
             <Field>
               <FieldLabel htmlFor={`${id}-code`}>
-                {step === "totp" ? "Code" : "Recovery code"}
+                {step === "recovery" ? "Recovery code" : "Code"}
               </FieldLabel>
               <Input
                 autoComplete="one-time-code"
                 autoFocus
                 id={`${id}-code`}
-                inputMode={step === "totp" ? "numeric" : "text"}
+                inputMode={step === "recovery" ? "text" : "numeric"}
                 onChange={(event) => setCode(event.target.value)}
                 required
                 spellCheck={false}
@@ -191,31 +259,29 @@ export function LoginForm({
               : "Continue"}
         </Button>
 
-        {step === "totp" ? (
+        {step === "email" ? (
           <Button
-            onClick={() => {
-              setError(undefined);
-              setCode("");
-              setStep("recovery");
-            }}
+            disabled={pending}
+            onClick={() => switchTo("email")}
             type="button"
             variant="link"
           >
-            Use a recovery code instead
-          </Button>
-        ) : step === "recovery" ? (
-          <Button
-            onClick={() => {
-              setError(undefined);
-              setCode("");
-              setStep("totp");
-            }}
-            type="button"
-            variant="link"
-          >
-            Use the authenticator app instead
+            Send a new code
           </Button>
         ) : null}
+        {step !== "password"
+          ? otherWays.map((way) => (
+              <Button
+                disabled={pending}
+                key={way.step}
+                onClick={() => switchTo(way.step)}
+                type="button"
+                variant="link"
+              >
+                {way.label}
+              </Button>
+            ))
+          : null}
       </form>
 
       {step === "password" && passkeys ? (

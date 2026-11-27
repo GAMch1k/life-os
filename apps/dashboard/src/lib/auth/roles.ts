@@ -33,13 +33,19 @@ export function isFresh(
   return now - created < SESSION_FRESH_SECONDS * 1000;
 }
 
-/** TOTP turned on, or at least one passkey. */
+/**
+ * TOTP turned on (a verified authenticator app), or at least one passkey.
+ * Sign-in codes by email (P22-16) turn "twoFactorEnabled" on too, but are
+ * not a second factor for the admin surfaces: an email account is not
+ * something only the person holds.
+ */
 export async function hasSecondFactor(
   db: Queryable,
   userId: string,
 ): Promise<boolean> {
   const { rows } = await db.query<{ ok: boolean }>(
-    `SELECT coalesce((SELECT "twoFactorEnabled" FROM "user" WHERE id = $1), false)
+    `SELECT (coalesce((SELECT "twoFactorEnabled" FROM "user" WHERE id = $1), false)
+             AND EXISTS (SELECT 1 FROM "twoFactor" WHERE "userId" = $1 AND verified IS NOT FALSE))
          OR EXISTS (SELECT 1 FROM passkey WHERE "userId" = $1) AS ok`,
     [userId],
   );

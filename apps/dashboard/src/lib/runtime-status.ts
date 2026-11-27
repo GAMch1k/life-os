@@ -69,6 +69,7 @@ export type FeedHealth = Pick<
   "id" | "name" | "enabled" | "refresh"
 >;
 export type NotificationChannel = NotificationsComponents["schemas"]["Channel"];
+export type EmailStatus = NotificationsComponents["schemas"]["EmailStatus"];
 /** Calendar's reminder delivery health (`GET /v1/reminders/status`). */
 export type ReminderDelivery =
   CalendarComponents["schemas"]["ReminderDeliveryStatus"];
@@ -588,6 +589,11 @@ export type RuntimeSignals = {
    * read, absent when not checked (the check is left out).
    */
   notificationChannels?: NotificationChannel[] | null;
+  /**
+   * Email through the owner's SMTP provider (docs/install/email.md), an
+   * Email part of the Notifications check; null or absent when not read.
+   */
+  email?: EmailStatus | null;
   /** The Google calendars with their sync state; null or absent when not read. */
   googleCalendars?: GoogleCalendar[] | null;
   /**
@@ -1450,6 +1456,82 @@ export function channelPart(
     default:
       return { ...base, state: "ok", summary: "Delivering normally." };
   }
+}
+
+/** What to do when email fails. */
+export const EMAIL_FAILING_ACTION =
+  "Account emails (reset links, sign-in codes, security alerts) are not going out. On the server, ./setup.sh status says why, and ./setup.sh email test you@example.com tries again (docs/install/email.md).";
+
+/**
+ * Email (docs/install/email.md), a part of the Notifications check: off,
+ * works, or failing since when; never the settings or an address.
+ */
+export function emailPart(status: EmailStatus, timeZone: string): StatusPart {
+  const base = { id: "email", title: "Email" };
+  switch (status.state) {
+    case "off":
+      return {
+        ...base,
+        state: "neutral",
+        summary:
+          "Off: Life OS sends no email. ./setup.sh email turns it on with your provider's SMTP settings.",
+        facts: [],
+      };
+    case "invalid":
+      return {
+        ...base,
+        state: "warning",
+        summary: "Its settings in .env cannot work, so no email goes out.",
+        detail: status.problem ?? undefined,
+        facts: [],
+      };
+    case "failing":
+      return {
+        ...base,
+        state: "warning",
+        summary: `Failing since ${formatTime(status.failingSince, timeZone)}.`,
+        detail: status.lastError ?? undefined,
+        facts: [
+          {
+            label: "Last sent",
+            value: formatTime(status.lastSuccessAt, timeZone),
+          },
+          {
+            label: "Last failure",
+            value: formatTime(status.lastFailureAt, timeZone),
+          },
+        ],
+      };
+    case "idle":
+      return {
+        ...base,
+        state: "ok",
+        summary: "Set up; nothing sent yet.",
+        facts: [],
+      };
+    default:
+      return {
+        ...base,
+        state: "ok",
+        summary: "Works.",
+        facts: [
+          {
+            label: "Last sent",
+            value: formatTime(status.lastSuccessAt, timeZone),
+          },
+        ],
+      };
+  }
+}
+
+/** Adds email to the Notifications check. */
+function withEmail(
+  check: StatusCheck,
+  status: EmailStatus | null | undefined,
+  timeZone: string,
+): StatusCheck {
+  if (!status) return check;
+  return withPart(check, emailPart(status, timeZone), EMAIL_FAILING_ACTION);
 }
 
 function notificationsCheck(
@@ -2625,15 +2707,19 @@ export function toRuntimeStatus(
     ...(signals.notificationChannels === undefined
       ? []
       : [
-          withFoodReminders(
-            withTaskReminders(
-              notificationsCheck(signals.notificationChannels, timeZone),
-              signals.taskReminders,
+          withEmail(
+            withFoodReminders(
+              withTaskReminders(
+                notificationsCheck(signals.notificationChannels, timeZone),
+                signals.taskReminders,
+                now,
+                timeZone,
+              ),
+              signals.foodReminders,
               now,
               timeZone,
             ),
-            signals.foodReminders,
-            now,
+            signals.email,
             timeZone,
           ),
         ]),
@@ -2752,6 +2838,12 @@ export async function getRuntimeStatus(
         .then(({ data }) => data?.items ?? null)
         .catch(() => null)
     : unread;
+  const email = checkOn("notifications")
+    ? notificationsClient
+        .GET("/v1/email/status", timeout)
+        .then(({ data }) => data ?? null)
+        .catch(() => null)
+    : unread;
   const bankConnections = checkOn("banking")
     ? bankingClient
         .GET("/v1/connections", timeout)
@@ -2852,6 +2944,7 @@ export async function getRuntimeStatus(
       calendarSources,
       googleConnection,
       notificationChannels: await notificationChannels,
+      email: await email,
       googleCalendars,
       eventReminders: await eventReminders,
       taskReminders: await taskReminders,

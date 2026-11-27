@@ -32,6 +32,11 @@ export type LoginContext = {
   signedInAt: number | null;
   /** Signed in, or the password re-entered, within 12 hours. */
   recentAuth: boolean;
+  /**
+   * Email works on this server (docs/install/email.md): "Forgot password?"
+   * and sign-in codes by email are offered only then.
+   */
+  emailEnabled: boolean;
 };
 
 export async function loginContext(): Promise<LoginContext> {
@@ -60,6 +65,7 @@ export async function loginContext(): Promise<LoginContext> {
           createdAt: session.sessionCreatedAt,
         }).catch(() => false)
       : false,
+    emailEnabled: (await rt.email?.enabled().catch(() => false)) ?? false,
   };
 }
 

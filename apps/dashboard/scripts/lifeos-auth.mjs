@@ -9,6 +9,9 @@
 //   node scripts/lifeos-auth.mjs legacy-access [on|off]
 //   node scripts/lifeos-auth.mjs sign-out-all [--keep-devices]
 //
+// A command that changes how accounts sign in (legacy access on, signing
+// everyone out) queues their security alert emails too (queueAlert).
+//
 // Plain JavaScript and only the pg driver, so that it runs in the runtime
 // image as it is. It never prints a password, hash, or key; it prints a setup
 // code or a reset link only to the person at the host's terminal.
@@ -47,6 +50,31 @@ export async function securityEvent(db, kind, fields = {}) {
   } catch (error) {
     console.error(
       `lifeos-auth: the security log has no entry for this (${error.message})`,
+    );
+  }
+}
+
+/**
+ * Queues the security alert email of a command run on the host
+ * (src/lib/auth/email-alerts.ts): for one account, or (userId null) for
+ * every account. The Dashboard sends it within a minute when email is on
+ * and the person's address is verified, and drops it otherwise. Like the
+ * log's entry, it never stops the command.
+ * @param {{ query: Function }} db
+ * @param {string} kind the switch in Settings → Email (legacy_access, sign_out)
+ * @param {string} event the security log's kind
+ * @param {{ userId?: string | null, detail?: string | null }} [fields]
+ */
+export async function queueAlert(db, kind, event, fields = {}) {
+  try {
+    await db.query(
+      `INSERT INTO email_outbox (user_id, kind, event, detail)
+       SELECT id, $1, $2, $3 FROM "user" WHERE $4::uuid IS NULL OR id = $4`,
+      [kind, event, fields.detail ?? null, fields.userId ?? null],
+    );
+  } catch (error) {
+    console.error(
+      `lifeos-auth: no alert email was queued for this (${error.message})`,
     );
   }
 }
@@ -120,6 +148,16 @@ export async function recoverOwner(
     );
     if (resetTwoFactor) {
       await db.query('DELETE FROM "twoFactor" WHERE "userId" = $1', [owner.id]);
+      // Sign-in codes by email too (P22-16), when auth_db has them.
+      await db.query("SAVEPOINT codes");
+      try {
+        await db.query("DELETE FROM email_sign_in_codes WHERE user_id = $1", [
+          owner.id,
+        ]);
+        await db.query("RELEASE SAVEPOINT codes");
+      } catch {
+        await db.query("ROLLBACK TO SAVEPOINT codes");
+      }
       await db.query(
         `UPDATE "user" SET "twoFactorEnabled" = false, "updatedAt" = now() WHERE id = $1`,
         [owner.id],
@@ -162,6 +200,12 @@ export async function setLegacyAccess(db, on) {
     subject: FIRST_USER_ID,
     detail: on ? "on" : "off",
   });
+  if (on) {
+    await queueAlert(db, "legacy_access", "legacy_access_changed", {
+      userId: FIRST_USER_ID,
+      detail: "on",
+    });
+  }
   await db.query(
     `INSERT INTO server_settings (key, value, updated_at, updated_by)
      VALUES ($1, to_jsonb($2::boolean), now(), NULL)
@@ -221,6 +265,9 @@ export async function signOutAll(db, { keepDevices = false } = {}) {
     throw error;
   }
   await securityEvent(db, "signed_out_everyone", {
+    detail: keepDevices ? "keep_devices" : null,
+  });
+  await queueAlert(db, "sign_out", "signed_out_everyone", {
     detail: keepDevices ? "keep_devices" : null,
   });
   return {

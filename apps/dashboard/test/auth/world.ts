@@ -85,6 +85,8 @@ export async function world(
     browser: (origin?: string, address?: string) =>
       new Browser(fetcher, origin, address),
     async close() {
+      // Alerts still being sent (email-alerts.ts) finish first.
+      await rt.emailAlerts?.();
       await rt.pool.end();
       await db.drop();
     },

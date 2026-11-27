@@ -4,12 +4,14 @@ import {
   KeyRound,
   LockKeyhole,
   LogOut,
+  Mail,
   MonitorSmartphone,
   ShieldCheck,
   Smartphone,
   Trash2,
   Unlock,
 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useId, useState, useTransition } from "react";
 
@@ -64,6 +66,7 @@ function when(iso: string | null, timeZone: string) {
 /** Settings → Security (src/app/settings/security/page.tsx). */
 export function SecuritySettings({
   accounts,
+  email,
   info,
   nav,
   passkeyOrigin,
@@ -75,6 +78,12 @@ export function SecuritySettings({
   welcome,
 }: {
   accounts: number;
+  /** Email's part, while email works on this server (else null: hidden). */
+  email?: {
+    address: string | null;
+    verified: boolean;
+    signInCodes: boolean;
+  } | null;
   info: AccountInfo;
   /** The links to Settings' other pages (and the admin pages). */
   nav?: React.ReactNode;
@@ -134,6 +143,7 @@ export function SecuritySettings({
       ) : null}
 
       <TwoFactorCard enabled={totpEnabled} username={user?.username ?? ""} />
+      {email ? <SignInCodesCard {...email} /> : null}
       <PasskeysCard
         hasSecondFactor={info.secondFactor}
         mfa={info.mfa}
@@ -450,6 +460,107 @@ function TwoFactorCard({
             </div>
           </div>
         ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Sign-in codes by email (docs/install/email.md): after the password, a
+ * 6-digit code to the verified address. Weaker than the authenticator app
+ * (whoever reads the mailbox has it), so it is not enough for the admin
+ * pages; offered only with a verified address.
+ */
+function SignInCodesCard({
+  address,
+  signInCodes,
+  verified,
+}: {
+  address: string | null;
+  signInCodes: boolean;
+  verified: boolean;
+}) {
+  const id = useId();
+  const router = useRouter();
+  const [asking, setAsking] = useState(false);
+  const [error, setError] = useState<string>();
+  const [busy, startTransition] = useTransition();
+
+  const change = (password: string) =>
+    startTransition(async () => {
+      setError(undefined);
+      const response = await fetch("/api/account/email/sign-in-codes", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: !signInCodes, password }),
+      }).catch(() => null);
+      if (!response?.ok) {
+        const body = (await response?.json().catch(() => null)) as {
+          error?: { message?: string };
+        } | null;
+        return setError(body?.error?.message ?? "Could not change it.");
+      }
+      setAsking(false);
+      router.refresh();
+    });
+
+  return (
+    <Card aria-labelledby={`${id}-title`} role="region">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2" id={`${id}-title`}>
+          <Mail aria-hidden="true" className="size-4" />
+          Sign-in code by email
+        </CardTitle>
+        <CardDescription>
+          After your password, Life OS emails a 6-digit code to your verified
+          address. The authenticator app is safer, since whoever reads your
+          email could sign in; the admin pages still need the authenticator app
+          or a passkey.
+        </CardDescription>
+        <CardAction>
+          <Badge variant={signInCodes ? "default" : "outline"}>
+            {signInCodes ? "On" : "Off"}
+          </Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="grid gap-3 text-sm">
+        {!verified && !signInCodes ? (
+          <p className="text-muted-foreground">
+            {address
+              ? "Verify your email address first, in "
+              : "Add and verify your email address first, in "}
+            <Link className="underline" href="/settings/email">
+              Settings → Email
+            </Link>
+            .
+          </p>
+        ) : asking ? (
+          <PasswordPrompt
+            action={signInCodes ? "Turn off" : "Turn on"}
+            busy={busy}
+            error={error}
+            onCancel={() => {
+              setAsking(false);
+              setError(undefined);
+            }}
+            onSubmit={change}
+          />
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              onClick={() => setAsking(true)}
+              type="button"
+              variant={signInCodes ? "outline" : "default"}
+            >
+              {signInCodes ? "Turn off" : "Turn on"}
+            </Button>
+            {address ? (
+              <span className="text-muted-foreground break-all">
+                Codes go to {address}
+              </span>
+            ) : null}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -36,6 +36,8 @@ import {
   scopesAllow,
 } from "./scopes";
 import type { LegacyUseLog } from "./security-log";
+import type { EmailLimiter } from "./email-account";
+import type { EmailService } from "./email-service";
 import type { LifeOsAuth } from "./server";
 import { legacyAccess } from "./store";
 
@@ -138,6 +140,15 @@ export type CheckRuntime = {
    * (device_key_cleanup), rather than at the next minute's run.
    */
   keyCleanup?: () => Promise<void>;
+  /**
+   * Email through the notifications service (docs/install/email.md); null
+   * without NOTIFICATIONS_SERVICE_URL. Whether it is on is its status.
+   */
+  email?: EmailService | null;
+  /** The limits on emails a stranger could make Life OS send. */
+  emailLimiter?: EmailLimiter;
+  /** Sends the security alerts that are due now (email-alerts.ts). */
+  emailAlerts?: () => Promise<void>;
 };
 
 /** Legacy access, cached for a few seconds: the check reads it often. */

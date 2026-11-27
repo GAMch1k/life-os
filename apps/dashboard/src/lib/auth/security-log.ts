@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from "pg";
 
 import { FIRST_USER_ID } from "./constants";
 import { describeUserAgent } from "./devices";
+import { alertFor, queueAlert } from "./email-alerts";
 
 /**
  * The security log (docs/architecture/multi-user.md#logs): sign-ins, failed
@@ -56,6 +57,9 @@ export const SECURITY_EVENT_KINDS = {
   signed_out_everywhere: "Signed out everywhere",
   credentials_revoked: "Devices, tokens, and apps signed out",
   password_confirmed: "Password confirmed",
+  email_changed: "Email address changed",
+  email_verified: "Email address verified",
+  password_reset_requested: "Reset link sent by email",
 } as const;
 
 export type SecurityEventKind = keyof typeof SECURITY_EVENT_KINDS;
@@ -84,6 +88,11 @@ export type SecurityEventInput = {
   detail?: string | null;
   count?: number;
   at?: Date;
+  /**
+   * The address the alert goes to when not the account's own: the old one,
+   * when the address changed. Never written into the log.
+   */
+  alertTo?: string | null;
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -127,13 +136,29 @@ export function detailCode(value: string | null | undefined): string | null {
 
 /**
  * Records one entry. It never throws: a sign-in must not fail because its
- * entry could not be written (the error is logged, without content).
+ * entry could not be written (the error is logged, without content). An
+ * entry that concerns an account's sign-in (a new password, two-factor
+ * changed, a new token, …) also queues the account's security alert email
+ * (email-alerts.ts), when email is on.
  */
 export async function recordSecurityEvent(
   db: Queryable,
   event: SecurityEventInput,
 ): Promise<void> {
   const at = event.at ?? new Date();
+  const alert = alertFor(event);
+  const subject = uuidOrNull(event.subjectUserId);
+  if (alert && subject) {
+    await queueAlert(db, {
+      userId: subject,
+      kind: alert,
+      event: event.kind,
+      detail: detailCode(event.detail),
+      address: clientAddress(event.headers),
+      device: deviceLabel(event.headers),
+      toAddress: event.alertTo ?? null,
+    });
+  }
   try {
     await db.query(
       `INSERT INTO security_events
