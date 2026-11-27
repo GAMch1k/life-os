@@ -10,6 +10,7 @@ import (
 
 	sharedconfig "github.com/GAMch1k/life-os/pkg/config"
 	"github.com/GAMch1k/life-os/pkg/database"
+	"github.com/GAMch1k/life-os/services/notifications/internal/email"
 )
 
 // Config holds process-level configuration for the Notifications service.
@@ -49,6 +50,18 @@ type Config struct {
 	WebPushPublicKey  string `env:"NOTIFICATIONS_WEBPUSH_VAPID_PUBLIC_KEY"`
 	WebPushPrivateKey string `env:"NOTIFICATIONS_WEBPUSH_VAPID_PRIVATE_KEY"`
 	WebPushSubject    string `env:"NOTIFICATIONS_WEBPUSH_SUBJECT"`
+	// Email (docs/install/email.md): the owner's SMTP provider, for the
+	// Dashboard's account emails. An empty host is email off. Settings that
+	// cannot work turn email off too, with the problem on Status: the
+	// service runs on (email.Parse). The password is a secret, never
+	// logged.
+	SMTPHost     string `env:"NOTIFICATIONS_SMTP_HOST"`
+	SMTPPort     string `env:"NOTIFICATIONS_SMTP_PORT"`
+	SMTPTLS      string `env:"NOTIFICATIONS_SMTP_TLS"`
+	SMTPUsername string `env:"NOTIFICATIONS_SMTP_USERNAME"`
+	SMTPPassword string `env:"NOTIFICATIONS_SMTP_PASSWORD"`
+	SMTPFrom     string `env:"NOTIFICATIONS_SMTP_FROM"`
+	SMTPFromName string `env:"NOTIFICATIONS_SMTP_FROM_NAME"`
 	// WorkerPollMillis is how often the delivery worker looks for due
 	// deliveries. A new notification also wakes it at once.
 	WorkerPollMillis int `env:"NOTIFICATIONS_WORKER_POLL_MILLIS" default:"1000"`
@@ -150,6 +163,20 @@ func ParseChannels(value string) ([]string, error) {
 func (c Config) ChannelNames() []string {
 	names, _ := ParseChannels(c.Channels)
 	return names
+}
+
+// EmailSettings are the SMTP settings, for email.Parse.
+func (c Config) EmailSettings() email.Settings {
+	return email.Settings{
+		Host:        c.SMTPHost,
+		Port:        c.SMTPPort,
+		TLS:         c.SMTPTLS,
+		Username:    c.SMTPUsername,
+		Password:    c.SMTPPassword,
+		From:        c.SMTPFrom,
+		FromName:    c.SMTPFromName,
+		LinkBaseURL: c.LinkBaseURL,
+	}
 }
 
 // WebPushSubjectOrDefault is the VAPID subject: NOTIFICATIONS_WEBPUSH_SUBJECT,

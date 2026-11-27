@@ -28,6 +28,8 @@ type Querier interface {
 	DeletePushSubscription(ctx context.Context, id pgtype.UUID) (int64, error)
 	// Ends a claimed delivery without sending it: failed or skipped.
 	FinishDelivery(ctx context.Context, arg FinishDeliveryParams) (Delivery, error)
+	// No row yet: nothing was sent.
+	GetEmailStatus(ctx context.Context) (GetEmailStatusRow, error)
 	GetNotification(ctx context.Context, id pgtype.UUID) (Notification, error)
 	GetNotificationByDedupeKey(ctx context.Context, dedupeKey string) (Notification, error)
 	GetPushSubscription(ctx context.Context, id pgtype.UUID) (PushSubscription, error)
@@ -49,6 +51,10 @@ type Querier interface {
 	MarkPushFailure(ctx context.Context, arg MarkPushFailureParams) error
 	// A push to the device was accepted (a test push).
 	MarkPushSuccess(ctx context.Context, id pgtype.UUID) error
+	// A send failed: failing since the first failure after the latest success.
+	NoteEmailFailed(ctx context.Context, arg NoteEmailFailedParams) error
+	// An email went out: sends work again.
+	NoteEmailSent(ctx context.Context, at pgtype.Timestamptz) error
 	// The push service refused the notification for a device for good: its final
 	// outcome, and the device's latest failure.
 	RecordPushFailed(ctx context.Context, arg RecordPushFailedParams) error

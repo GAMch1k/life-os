@@ -15,19 +15,19 @@ import (
 
 // Defines values for ChannelState.
 const (
-	Failing ChannelState = "failing"
-	Idle    ChannelState = "idle"
-	Ok      ChannelState = "ok"
+	ChannelStateFailing ChannelState = "failing"
+	ChannelStateIdle    ChannelState = "idle"
+	ChannelStateOk      ChannelState = "ok"
 )
 
 // Valid indicates whether the value is a known member of the ChannelState enum.
 func (e ChannelState) Valid() bool {
 	switch e {
-	case Failing:
+	case ChannelStateFailing:
 		return true
-	case Idle:
+	case ChannelStateIdle:
 		return true
-	case Ok:
+	case ChannelStateOk:
 		return true
 	default:
 		return false
@@ -55,6 +55,33 @@ func (e DeliveryStatus) Valid() bool {
 	case DeliveryStatusSent:
 		return true
 	case DeliveryStatusSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EmailState.
+const (
+	EmailStateFailing EmailState = "failing"
+	EmailStateIdle    EmailState = "idle"
+	EmailStateInvalid EmailState = "invalid"
+	EmailStateOff     EmailState = "off"
+	EmailStateOk      EmailState = "ok"
+)
+
+// Valid indicates whether the value is a known member of the EmailState enum.
+func (e EmailState) Valid() bool {
+	switch e {
+	case EmailStateFailing:
+		return true
+	case EmailStateIdle:
+		return true
+	case EmailStateInvalid:
+		return true
+	case EmailStateOff:
+		return true
+	case EmailStateOk:
 		return true
 	default:
 		return false
@@ -186,6 +213,60 @@ type Delivery struct {
 
 // DeliveryStatus pending = queued and not tried yet, or being sent now; retrying = an attempt failed and another is scheduled at nextAttemptAt; sent = the channel accepted it; failed = a permanent error, or no success within the maximum delivery age; skipped = deliberately not sent, for example because the channel is no longer configured.
 type DeliveryStatus string
+
+// EmailMessage defines model for EmailMessage.
+type EmailMessage struct {
+	// Html A simple HTML alternative of the same text: no scripts, no remote images.
+	Html *string `json:"html,omitempty"`
+
+	// Kind What it is, for the log (never the content): such as verify_email, password_reset, sign_in_code, or alert.new_device.
+	Kind string `json:"kind"`
+
+	// Subject One line, without control characters.
+	Subject string `json:"subject"`
+
+	// Text The plain-text body.
+	Text string `json:"text"`
+
+	// To One address, such as you@example.com (no name, no list).
+	To string `json:"to"`
+}
+
+// EmailState off = no SMTP settings; invalid = settings that cannot work (problem says why); idle = set up, nothing sent yet; ok = the latest send went through; failing = the latest send failed.
+type EmailState string
+
+// EmailStatus defines model for EmailStatus.
+type EmailStatus struct {
+	// Configured Whether email can be sent (settings there and usable).
+	Configured bool `json:"configured"`
+
+	// FailingSince The first failure since the latest success (state failing).
+	FailingSince *time.Time `json:"failingSince"`
+
+	// LastError The latest failure in plain words.
+	LastError *string `json:"lastError"`
+
+	// LastErrorCode The latest failure's code, such as email_auth_failed.
+	LastErrorCode *string `json:"lastErrorCode"`
+
+	// LastFailureAt When a send last failed.
+	LastFailureAt *time.Time `json:"lastFailureAt"`
+
+	// LastSuccessAt When an email last went out.
+	LastSuccessAt *time.Time `json:"lastSuccessAt"`
+
+	// Problem What is wrong with the settings (state invalid), in plain words, such as "LIFE_OS_SMTP_TLS must be tls, starttls, or none".
+	Problem *string `json:"problem"`
+
+	// State off = no SMTP settings; invalid = settings that cannot work (problem says why); idle = set up, nothing sent yet; ok = the latest send went through; failing = the latest send failed.
+	State EmailState `json:"state"`
+}
+
+// EmailTestRequest defines model for EmailTestRequest.
+type EmailTestRequest struct {
+	// To The address to send the test email to.
+	To string `json:"to"`
+}
 
 // Error defines model for Error.
 type Error struct {
@@ -363,6 +444,12 @@ type ListNotificationsParams struct {
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// SendEmailJSONRequestBody defines body for SendEmail for application/json ContentType.
+type SendEmailJSONRequestBody = EmailMessage
+
+// SendEmailTestJSONRequestBody defines body for SendEmailTest for application/json ContentType.
+type SendEmailTestJSONRequestBody = EmailTestRequest
+
 // CreateNotificationJSONRequestBody defines body for CreateNotification for application/json ContentType.
 type CreateNotificationJSONRequestBody = CreateNotificationRequest
 
@@ -380,6 +467,15 @@ type ServerInterface interface {
 	// ListChannels List delivery channels and their health
 	// (GET /v1/channels)
 	ListChannels(c fiber.Ctx) error
+	// SendEmail Send an email
+	// (POST /v1/email/messages)
+	SendEmail(c fiber.Ctx) error
+	// GetEmailStatus Whether email works
+	// (GET /v1/email/status)
+	GetEmailStatus(c fiber.Ctx) error
+	// SendEmailTest Send a test email
+	// (POST /v1/email/test)
+	SendEmailTest(c fiber.Ctx) error
 	// ListNotifications List notifications
 	// (GET /v1/notifications)
 	ListNotifications(c fiber.Ctx, params ListNotificationsParams) error
@@ -432,6 +528,60 @@ func (siw *ServerInterfaceWrapper) ListChannels(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.ListChannels(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// SendEmail operation middleware
+func (siw *ServerInterfaceWrapper) SendEmail(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.SendEmail(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetEmailStatus operation middleware
+func (siw *ServerInterfaceWrapper) GetEmailStatus(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetEmailStatus(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// SendEmailTest operation middleware
+func (siw *ServerInterfaceWrapper) SendEmailTest(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.SendEmailTest(c)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -807,5 +957,11 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Delete(options.BaseURL+"/v1/push/device-keys/:keyId", wrapper.DeleteDeviceKeySubscriptions)
 
 	router.Post(options.BaseURL+"/v1/push/test", wrapper.SendPushTest)
+
+	router.Get(options.BaseURL+"/v1/email/status", wrapper.GetEmailStatus)
+
+	router.Post(options.BaseURL+"/v1/email/messages", wrapper.SendEmail)
+
+	router.Post(options.BaseURL+"/v1/email/test", wrapper.SendEmailTest)
 
 }

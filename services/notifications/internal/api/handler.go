@@ -33,7 +33,9 @@ type Handler struct {
 	activity *activity.Emitter
 	// push is web push when its VAPID keys are configured, else nil.
 	push Pusher
-	now  func() time.Time
+	// email sends the Dashboard's account emails; nil: email is off.
+	email Mailing
+	now   func() time.Time
 }
 
 var _ generated.ServerInterface = (*Handler)(nil)

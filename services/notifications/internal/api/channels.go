@@ -66,10 +66,10 @@ func channelOutput(name string, row store.ChannelHealthRow) generated.Channel {
 func channelState(lastSuccess, lastFailure *time.Time) generated.ChannelState {
 	switch {
 	case lastFailure != nil && (lastSuccess == nil || lastFailure.After(*lastSuccess)):
-		return generated.Failing
+		return generated.ChannelStateFailing
 	case lastSuccess != nil:
-		return generated.Ok
+		return generated.ChannelStateOk
 	default:
-		return generated.Idle
+		return generated.ChannelStateIdle
 	}
 }

@@ -41,10 +41,19 @@ info:
     each of them through its browser's push service.
 
 
+    Email (`/v1/email/...`, docs/install/email.md): optional, through the
+    owner's SMTP provider. The Dashboard sends its account emails here
+    (verification and reset links, sign-in codes, security alerts); the
+    SMTP settings and password stay in `.env`, never in the database or a
+    log.
+
+
     Errors use the shared envelope `{"error": {"code", "message"},
     "request_id"}`: `bad_request` (400, invalid input), `actor_required` (400),
-    `not_found` (404), `push_not_configured` (409, web push has no VAPID keys
-    on this server), and `internal_error` (500).
+    `internal_only` (403), `not_found` (404), `push_not_configured` (409, web
+    push has no VAPID keys on this server), `email_not_configured` (409, no
+    SMTP settings), `rate_limited` (429), `email_*` (502, an email did not go
+    out), and `internal_error` (500).
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://notifications:8080}]
 paths:
@@ -246,8 +255,113 @@ paths:
         '400': {description: 'Invalid request (bad_request), or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '404': {description: No such device (not_found), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '409': {description: Web push has no VAPID keys on this server (push_not_configured), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/email/status:
+    get:
+      summary: Whether email works
+      description: >-
+        Email (docs/install/email.md) is optional: the owner's SMTP provider,
+        set in `.env` (`./setup.sh email`). `configured` says whether the
+        settings are there and usable; `state` sums up the latest sends:
+        `off` (no settings), `invalid` (settings that cannot work, `problem`
+        says why), `idle` (set up, nothing sent yet), `ok` (the latest send
+        went through), `failing` (the latest send failed, since
+        `failingSince`). A recipient the provider refused does not count as
+        failing. Never the password, an address, or a message. For the
+        Dashboard (Status, and whether to offer its email options) and
+        `./setup.sh status` on the private network; through the gateway,
+        only the server's admins.
+      operationId: getEmailStatus
+      security: []
+      responses:
+        '200': {description: Email's status, content: {application/json: {schema: {$ref: '#/components/schemas/EmailStatus'}}}}
+        '403': {description: Not an admin (admin_only or second_factor_required), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/email/messages:
+    post:
+      summary: Send an email
+      description: >-
+        Sends one email to one address through the owner's SMTP provider,
+        right away, and answers once the provider accepted it (204) or
+        refused it. Plain text, with an optional simple HTML alternative.
+        Nothing is stored: the outcome counts towards the status
+        (getEmailStatus), and the log says only the kind and the outcome.
+        For the Dashboard's account emails (verification links, reset links,
+        sign-in codes, security alerts) on the private network: a request
+        that carries an identity token, which every request through the
+        gateway does, is refused (403 internal_only). At most 30 emails a
+        minute and 300 an hour go out (429 rate_limited).
+      operationId: sendEmail
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/EmailMessage'}}}}
+      responses:
+        '204': {description: The provider accepted the email}
+        '400': {description: 'Invalid message (bad_request), or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '403': {description: Not an internal caller (internal_only), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: Email is not set up on this server (email_not_configured), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '429': {description: Too many emails (rate_limited), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '502':
+          description: >-
+            The email did not go out. The code says why: email_connect_failed
+            (the mail server cannot be reached), email_tls_failed,
+            email_auth_failed (user or password refused), email_sender_refused
+            (the From address), email_recipient_refused (the address it was
+            for), email_message_refused, email_timeout, or email_failed; the
+            message says it in plain words, never with the password.
+          content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+  /v1/email/test:
+    post:
+      summary: Send a test email
+      description: >-
+        Sends Life OS's test email ("Life OS can send email") to one address,
+        as sendEmail does, for `./setup.sh email` and `./setup.sh email test`.
+        Internal callers only, as sendEmail.
+      operationId: sendEmailTest
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/EmailTestRequest'}}}}
+      responses:
+        '204': {description: The provider accepted the test email}
+        '400': {description: 'Invalid address (bad_request), or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '403': {description: Not an internal caller (internal_only), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: Email is not set up on this server (email_not_configured), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '429': {description: Too many emails (rate_limited), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '502': {description: 'The email did not go out (see sendEmail for the codes)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
 components:
   schemas:
+    EmailState:
+      type: string
+      description: >-
+        off = no SMTP settings; invalid = settings that cannot work (problem
+        says why); idle = set up, nothing sent yet; ok = the latest send went
+        through; failing = the latest send failed.
+      enum: [off, invalid, idle, ok, failing]
+    EmailStatus:
+      type: object
+      required: [configured, state, problem, lastSuccessAt, lastFailureAt, failingSince, lastErrorCode, lastError]
+      properties:
+        configured: {type: boolean, description: Whether email can be sent (settings there and usable).}
+        state: {$ref: '#/components/schemas/EmailState'}
+        problem: {type: string, nullable: true, description: 'What is wrong with the settings (state invalid), in plain words, such as "LIFE_OS_SMTP_TLS must be tls, starttls, or none".'}
+        lastSuccessAt: {type: string, format: date-time, nullable: true, description: When an email last went out.}
+        lastFailureAt: {type: string, format: date-time, nullable: true, description: When a send last failed.}
+        failingSince: {type: string, format: date-time, nullable: true, description: The first failure since the latest success (state failing).}
+        lastErrorCode: {type: string, nullable: true, description: 'The latest failure''s code, such as email_auth_failed.'}
+        lastError: {type: string, nullable: true, description: The latest failure in plain words.}
+    EmailMessage:
+      type: object
+      required: [to, subject, text, kind]
+      properties:
+        to: {type: string, minLength: 3, maxLength: 254, description: 'One address, such as you@example.com (no name, no list).'}
+        subject: {type: string, minLength: 1, maxLength: 200, description: 'One line, without control characters.'}
+        text: {type: string, minLength: 1, maxLength: 20000, description: The plain-text body.}
+        html: {type: string, maxLength: 100000, description: 'A simple HTML alternative of the same text: no scripts, no remote images.'}
+        kind:
+          type: string
+          pattern: '^[a-z][a-z0-9_.:-]{0,47}$'
+          description: 'What it is, for the log (never the content): such as verify_email, password_reset, sign_in_code, or alert.new_device.'
+    EmailTestRequest:
+      type: object
+      required: [to]
+      properties:
+        to: {type: string, minLength: 3, maxLength: 254, description: The address to send the test email to.}
     ChannelState:
       type: string
       description: >-

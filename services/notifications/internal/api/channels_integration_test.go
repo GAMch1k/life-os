@@ -47,7 +47,7 @@ func TestChannelsReportDeliveryHealth(t *testing.T) {
 		t.Fatalf("channels = %+v, want ntfy then log", items)
 	}
 	for _, item := range items {
-		if item.State != generated.Idle || item.LastSuccessAt != nil || item.LastFailureAt != nil || item.LastError != nil ||
+		if item.State != generated.ChannelStateIdle || item.LastSuccessAt != nil || item.LastFailureAt != nil || item.LastError != nil ||
 			item.RecentFailures != 0 || item.Retrying != 0 || item.Pending != 0 {
 			t.Errorf("unused channel = %+v, want idle", item)
 		}
@@ -66,21 +66,21 @@ func TestChannelsReportDeliveryHealth(t *testing.T) {
 
 	items = c.channels()
 	ntfy, logChannel := items[0], items[1]
-	if ntfy.State != generated.Failing || ntfy.LastError == nil || *ntfy.LastError != "ntfy is unreachable: dial tcp: lookup ntfy" ||
+	if ntfy.State != generated.ChannelStateFailing || ntfy.LastError == nil || *ntfy.LastError != "ntfy is unreachable: dial tcp: lookup ntfy" ||
 		ntfy.RecentFailures != 1 || ntfy.Retrying != 1 || ntfy.Pending != 1 {
 		t.Errorf("ntfy = %+v, want failing with one retrying, one pending", ntfy)
 	}
 	if ntfy.LastSuccessAt == nil || ntfy.LastFailureAt == nil || !ntfy.LastFailureAt.After(*ntfy.LastSuccessAt) {
 		t.Errorf("ntfy times = %v, %v, want a failure after the success", ntfy.LastSuccessAt, ntfy.LastFailureAt)
 	}
-	if logChannel.State != generated.Ok || logChannel.RecentFailures != 0 || logChannel.Retrying != 0 || logChannel.Pending != 1 ||
+	if logChannel.State != generated.ChannelStateOk || logChannel.RecentFailures != 0 || logChannel.Retrying != 0 || logChannel.Pending != 1 ||
 		logChannel.LastError == nil || *logChannel.LastError != "an old failure" {
 		t.Errorf("log = %+v, want ok with its old failure outside the recent window", logChannel)
 	}
 
 	// A later success clears the failing state.
 	c.setDelivery(second, "ntfy", "sent", "", time.Minute)
-	if got := c.channels()[0]; got.State != generated.Ok || got.Retrying != 0 {
+	if got := c.channels()[0]; got.State != generated.ChannelStateOk || got.Retrying != 0 {
 		t.Errorf("ntfy after a success = %+v, want ok", got)
 	}
 }
