@@ -16,7 +16,7 @@ The first account needs a one-time **setup code** from the server. Whoever can r
 
    It prints a code such as `K7QM-2XRP-9VDA-H4TC`. `./setup.sh up` and `./setup.sh update` print one by themselves while no account exists. A code works once, for 24 hours; a new one replaces the old one. A sign-up that is refused for its input (a password that is too short, say) leaves the code working; once an account is made with it, it is used up, and of two sign-ups at the same moment only one gets the account.
 
-2. Open Life OS at its HTTPS address (or `http://localhost:3000` through an SSH tunnel), go to **/setup**, and enter the code, a username, and a password of at least 10 characters. A name and an email address are optional: the email is only shown, never used to sign in or to send anything.
+2. Open Life OS at its HTTPS address (or `http://localhost:3000` through an SSH tunnel), go to **/setup**, and enter the code, a username, and a password of at least 10 characters. A name and an email address are optional: the email is never used to sign in, and Life OS sends to it only once [email](email.md) is set up and you verified the address.
 
 3. Life OS signs you in and opens **Settings → Security**. Turn on two-factor sign-in there next ([Two-factor sign-in](#two-factor-sign-in)): signed in, the owner needs it before Status shows its details and the admin pages open ([The server's admin](#the-servers-admin)).
 
@@ -24,7 +24,7 @@ In a clone of the repository (the reference server), the same command runs in th
 
 ## Signing in
 
-**/login** asks for the username and the password, then, with two-factor on, for the 6-digit code of your authenticator app (or one of your recovery codes). With a passkey you sign in with your phone's or computer's screen lock alone. A session lasts 30 days from its last use, in that browser.
+**/login** asks for the username and the password, then, with two-factor on, for the 6-digit code of your authenticator app (or one of your recovery codes, or a [sign-in code by email](email.md#what-life-os-sends)). With a passkey you sign in with your phone's or computer's screen lock alone. A session lasts 30 days from its last use, in that browser.
 
 Signing in works where the session stays private: at an `https://` address, and at `http://127.0.0.1` and `http://localhost` on the server itself, which is where an SSH tunnel ends (in every current browser, Safari too: there the session cookie has no `Secure` flag, which Safari refuses on plain HTTP; the traffic never leaves the server, or travels inside the tunnel). Two things follow at `127.0.0.1` and `localhost`. Cookies ignore ports, so other web apps you open at `127.0.0.1` or `localhost` in the same browser, on any port, receive Life OS's session cookie too: open only apps you trust there, or use Life OS at its HTTPS address. And the browser must send `Sec-Fetch-Site`, which Chromium, Firefox, and Safari 16.4 or newer do: older browsers cannot sign in or make changes there. At any other plain-HTTP address, such as a WireGuard or LAN address `http://10.8.0.1:3000`, signing in is off, because anyone on the way could read the password and the session; the login page says how to go on. To allow it anyway on such a host, run `./setup.sh gateway --allow-http-login` and then `./setup.sh up` (`./setup.sh` and `./setup.sh gateway --bind <address>` offer it for a LAN or VPN address): it lists the gateway's address, and the host of an `http://` address, in `LIFE_OS_INSECURE_LOGIN_HOSTS` in `.env` (comma-separated, such as `10.8.0.1`; by hand, recreate the Dashboard after a change). Passkeys never work there. HTTPS is better: `tailscale serve`, or a reverse proxy with a certificate ([Access it safely](access.md)).
 
@@ -47,6 +47,7 @@ The person icon in the header opens **Settings → Security** (`/settings/securi
 | Section | What you can do |
 | --- | --- |
 | **Authenticator app** | Turn on two-factor sign-in with an authenticator app (scan the QR code, or type the key), get ten recovery codes, make new ones, or turn it off. Each needs your password. |
+| **Sign-in code by email** | With [email](email.md) set up and your address verified: a 6-digit code by email as your second factor, instead of or next to the authenticator app. Turning it on or off needs your password. The authenticator app stays the better choice, and the admin pages need it (or a passkey). |
 | **Passkeys** | Add a passkey (your phone's or computer's screen lock), or remove one. Passkeys work at the public address (`LIFE_OS_PUBLIC_URL`) only. |
 | **Password** | Change it; every other session is signed out. "Also sign out my devices, API tokens, and connected apps" (ticked unless you untick it) signs out every paired phone and watch, every API token, and every connected app too, and this browser stays signed in. |
 | **Where you are signed in** | Every session, with its browser and last use: sign one out, every one but this, or [everything at once](#sign-out-everywhere). |
@@ -59,6 +60,10 @@ Adding a passkey needs a sign-in from the last 12 hours; Life OS asks you to sig
 ### Two-factor sign-in
 
 An authenticator app (Google Authenticator, Aegis, 1Password, and others) shows a new 6-digit code every 30 seconds. Turn it on, scan the QR code, enter the code the app shows, and keep the ten **recovery codes** somewhere safe, such as a password manager: each signs you in once if your phone is not at hand. A passkey counts as two-factor too.
+
+## Settings → Email
+
+With [email](email.md) set up, **Settings → Email** (`/settings/email`) has your email address: add or change it (with a sign-in, or your password, from the last 12 hours), and verify it with the link Life OS sends (**not verified · Send link**). A verified address gets the "Forgot password?" link, sign-in codes by email, and security alerts. Below it, a switch for each kind of security alert: turn off the ones you don't want. They are yours: an admin cannot change them. Without email set up, the page is not there.
 
 ## Settings → Devices
 
@@ -118,8 +123,9 @@ Before accounts, whoever reached Life OS was its owner. **Legacy access** keeps 
 
 ## Locked out
 
+- **Forgot the password, with email:** with [email](email.md) set up and your address verified, use **Forgot password?** on the sign-in page. It sends a one-time link, for 30 minutes, that works as the one below; two-factor sign-in stays on.
 - **Forgot the password:** on the server, `./setup.sh recover-owner` prints a one-time link to set a new one (`https://…/reset/<code>`). It works once, for 24 hours, and signs out every session of the account, its paired phones and watches, its API tokens, and its connected apps: pair them again afterwards. Setting the new password also ends the account's delay after [failed sign-ins](#failed-sign-ins).
-- **Lost the authenticator app and the recovery codes:** `./setup.sh recover-owner --reset-2fa` does the same and also turns two-factor off; turn it on again afterwards.
+- **Lost the authenticator app and the recovery codes:** `./setup.sh recover-owner --reset-2fa` does the same and also turns two-factor off (the authenticator app, and sign-in codes by email); turn it on again afterwards.
 
 ## Sign everyone out
 

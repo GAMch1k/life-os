@@ -89,7 +89,7 @@ For everyday use from your phone and laptop, choose a way in with HTTPS: [Access
 
 - [Install guide](docs/install/README.md): the requirements, setup, and every `setup.sh` command.
 - [Manual install](docs/install/manual.md): with Portainer, Dockge, or Unraid, and a `.env` from `./setup.sh env`.
-- [Access it safely](docs/install/access.md), [Accounts](docs/install/accounts.md), and [Modules](docs/install/modules.md): AI processing, voice notes, Google Calendar, bank sync, and more, each switched on when you want it.
+- [Access it safely](docs/install/access.md), [Accounts](docs/install/accounts.md), [Email](docs/install/email.md), and [Modules](docs/install/modules.md): AI processing, voice notes, Google Calendar, bank sync, and more, each switched on when you want it.
 - [Backups](docs/install/backups.md), [Updating](docs/install/updating.md), [Troubleshooting](docs/install/troubleshooting.md), and [Uninstalling](docs/install/uninstall.md).
 - [Phone and watch apps](docs/install/phone-apps.md), downloaded from the [life-os-app releases](https://github.com/GAMch1k/life-os-app/releases).
 - Building Life OS from source, or working on it: [Development](docs/development/README.md) and the [technical documentation](docs/README.md).
