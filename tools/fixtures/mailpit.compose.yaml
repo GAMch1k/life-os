@@ -1,0 +1,27 @@
+# The email smoke's overlay (tools/smoke-email): a throwaway SMTP catcher,
+# Mailpit, on the verification stack's private network, as the owner's
+# provider would be, and the notifications service sending to it as to a
+# relay on the owner's own network (TLS none, no user or password). Mailpit
+# keeps what it receives in memory and shows it on its API (port 8025),
+# which only the stack's containers reach: it publishes no port.
+# tools/verify-compose refuses any other SMTP host, and any SMTP password, on
+# the verification stack, so no test email ever reaches a real mailbox.
+services:
+  mailpit:
+    image: axllent/mailpit:v1.34.0@sha256:23a2ef85bc50853ab3093645d1d64679afd8887e89da5e48a88940c172591a4e
+    environment:
+      MP_SMTP_DISABLE_RDNS: "true"
+      MP_MAX_MESSAGES: "500"
+    networks: [backend]
+    restart: "no"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  notifications:
+    environment:
+      NOTIFICATIONS_SMTP_HOST: mailpit
+      NOTIFICATIONS_SMTP_PORT: "1025"
+      NOTIFICATIONS_SMTP_TLS: none
+      NOTIFICATIONS_SMTP_USERNAME: ""
+      NOTIFICATIONS_SMTP_PASSWORD: ""
+      NOTIFICATIONS_SMTP_FROM: lifeos@smoke.test
+      NOTIFICATIONS_SMTP_FROM_NAME: Life OS smoke

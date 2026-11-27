@@ -232,10 +232,117 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/email/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether email works
+         * @description Email (docs/install/email.md) is optional: the owner's SMTP provider, set in `.env` (`./setup.sh email`). `configured` says whether the settings are there and usable; `state` sums up the latest sends: `off` (no settings), `invalid` (settings that cannot work, `problem` says why), `idle` (set up, nothing sent yet), `ok` (the latest send went through), `failing` (the latest send failed, since `failingSince`). A recipient the provider refused does not count as failing. Never the password, an address, or a message. For the Dashboard (Status, and whether to offer its email options) and `./setup.sh status` on the private network; through the gateway, only the server's admins.
+         */
+        get: operations["getEmailStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/email/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send an email
+         * @description Sends one email to one address through the owner's SMTP provider, right away, and answers once the provider accepted it (204) or refused it. Plain text, with an optional simple HTML alternative. Nothing is stored: the outcome counts towards the status (getEmailStatus), and the log says only the kind and the outcome. For the Dashboard's account emails (verification links, reset links, sign-in codes, security alerts) on the private network: a request that carries an identity token, which every request through the gateway does, is refused (403 internal_only). At most 30 emails a minute and 300 an hour go out (429 rate_limited).
+         */
+        post: operations["sendEmail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/email/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a test email
+         * @description Sends Life OS's test email ("Life OS can send email") to one address, as sendEmail does, for `./setup.sh email` and `./setup.sh email test`. Internal callers only, as sendEmail.
+         */
+        post: operations["sendEmailTest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description off = no SMTP settings; invalid = settings that cannot work (problem says why); idle = set up, nothing sent yet; ok = the latest send went through; failing = the latest send failed.
+         * @enum {string}
+         */
+        EmailState: "off" | "invalid" | "idle" | "ok" | "failing";
+        EmailStatus: {
+            /** @description Whether email can be sent (settings there and usable). */
+            configured: boolean;
+            state: components["schemas"]["EmailState"];
+            /** @description What is wrong with the settings (state invalid), in plain words, such as "LIFE_OS_SMTP_TLS must be tls, starttls, or none". */
+            problem: string | null;
+            /**
+             * Format: date-time
+             * @description When an email last went out.
+             */
+            lastSuccessAt: string | null;
+            /**
+             * Format: date-time
+             * @description When a send last failed.
+             */
+            lastFailureAt: string | null;
+            /**
+             * Format: date-time
+             * @description The first failure since the latest success (state failing).
+             */
+            failingSince: string | null;
+            /** @description The latest failure's code, such as email_auth_failed. */
+            lastErrorCode: string | null;
+            /** @description The latest failure in plain words. */
+            lastError: string | null;
+        };
+        EmailMessage: {
+            /** @description One address, such as you@example.com (no name, no list). */
+            to: string;
+            /** @description One line, without control characters. */
+            subject: string;
+            /** @description The plain-text body. */
+            text: string;
+            /** @description A simple HTML alternative of the same text: no scripts, no remote images. */
+            html?: string;
+            /** @description What it is, for the log (never the content): such as verify_email, password_reset, sign_in_code, or alert.new_device. */
+            kind: string;
+        };
+        EmailTestRequest: {
+            /** @description The address to send the test email to. */
+            to: string;
+        };
         /**
          * @description ok = the latest outcome was a success; failing = the latest outcome was a failure (a delivery failed, or waits for a retry, after the latest success); idle = nothing has been delivered or failed yet.
          * @enum {string}
@@ -942,6 +1049,169 @@ export interface operations {
             };
             /** @description Web push has no VAPID keys on this server (push_not_configured) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getEmailStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Email's status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailStatus"];
+                };
+            };
+            /** @description Not an admin (admin_only or second_factor_required) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    sendEmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailMessage"];
+            };
+        };
+        responses: {
+            /** @description The provider accepted the email */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid message (bad_request), or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not an internal caller (internal_only) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Email is not set up on this server (email_not_configured) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many emails (rate_limited) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The email did not go out. The code says why: email_connect_failed (the mail server cannot be reached), email_tls_failed, email_auth_failed (user or password refused), email_sender_refused (the From address), email_recipient_refused (the address it was for), email_message_refused, email_timeout, or email_failed; the message says it in plain words, never with the password. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    sendEmailTest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailTestRequest"];
+            };
+        };
+        responses: {
+            /** @description The provider accepted the test email */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid address (bad_request), or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not an internal caller (internal_only) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Email is not set up on this server (email_not_configured) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many emails (rate_limited) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The email did not go out (see sendEmail for the codes) */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

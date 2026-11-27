@@ -278,7 +278,9 @@ services:
   # installed Life OS app) with the VAPID keys (LIFE_OS_WEBPUSH_*, empty by
   # default), through their vendors' push services (fcm.googleapis.com,
   # updates.push.services.mozilla.com, …) over HTTPS: the backend network's
-  # outbound access, as for the other integrations.
+  # outbound access, as for the other integrations. Email (optional,
+  # docs/install/email.md) goes through the owner's SMTP provider
+  # (LIFE_OS_SMTP_*) over the same outbound access; an empty host is off.
   notifications:
     build: {context: ., dockerfile: services/notifications/Dockerfile}
     environment:
@@ -295,6 +297,13 @@ services:
       NOTIFICATIONS_WEBPUSH_VAPID_PUBLIC_KEY: "${LIFE_OS_WEBPUSH_VAPID_PUBLIC_KEY:-}"
       NOTIFICATIONS_WEBPUSH_VAPID_PRIVATE_KEY: "${LIFE_OS_WEBPUSH_VAPID_PRIVATE_KEY:-}"
       NOTIFICATIONS_WEBPUSH_SUBJECT: "${LIFE_OS_WEBPUSH_SUBJECT:-}"
+      NOTIFICATIONS_SMTP_HOST: "${LIFE_OS_SMTP_HOST:-}"
+      NOTIFICATIONS_SMTP_PORT: "${LIFE_OS_SMTP_PORT:-}"
+      NOTIFICATIONS_SMTP_TLS: "${LIFE_OS_SMTP_TLS:-}"
+      NOTIFICATIONS_SMTP_USERNAME: "${LIFE_OS_SMTP_USERNAME:-}"
+      NOTIFICATIONS_SMTP_PASSWORD: "${LIFE_OS_SMTP_SECRET:-}"
+      NOTIFICATIONS_SMTP_FROM: "${LIFE_OS_SMTP_FROM:-}"
+      NOTIFICATIONS_SMTP_FROM_NAME: "${LIFE_OS_SMTP_FROM_NAME:-}"
     expose: ["8080"]
     depends_on: {notifications-migrate: {condition: service_completed_successfully}}
     networks: [backend, notify-internal]

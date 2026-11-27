@@ -2,7 +2,7 @@
 
 Life OS tells you about things: the morning summary of your day, task and event reminders, food that expires tomorrow, a bank access that ends soon, a capture that needs you in Human Review, and problems on the Status page. Every notification is listed under **Notifications** in Life OS. By default that is all: nothing leaves your server.
 
-To get them on your phone, choose one of two ways, or both.
+To get them on your phone, choose one of two ways, or both. Email is for account emails for now (verifying your address, password reset links, sign-in codes, security alerts): [Email](email.md).
 
 ## The Life OS phone app
 

@@ -28,7 +28,8 @@ const USERNAME = /^[a-zA-Z0-9_.]{3,30}$/;
 /**
  * The first account: the setup code from the server (./setup.sh
  * setup-code), a username and password, and, if wanted, a name and an
- * email address (only shown, never used to sign in or to send anything).
+ * email address (never used to sign in; once email is set up and the
+ * address verified, Life OS's account emails go there).
  */
 export function SetupForm({ context }: { context: LoginContext }) {
   const id = useId();
@@ -150,7 +151,8 @@ export function SetupForm({ context }: { context: LoginContext }) {
               value={email}
             />
             <FieldDescription className="text-xs">
-              Only shown. Life OS never signs in or sends mail with it.
+              Never used to sign in. Once the server sends email and you verify
+              it (Settings → Email), Life OS&apos;s account emails go there.
             </FieldDescription>
           </Field>
           <Field data-invalid={Boolean(errors.password)}>

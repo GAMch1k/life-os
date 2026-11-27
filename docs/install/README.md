@@ -105,6 +105,7 @@ Life OS works without any of them. Each optional module can be turned on during 
 | `./setup.sh modules on server-health` | The Status page's Server card: memory, disks, and every container on the server (`server-health`; it reads the Docker socket) | [Modules](modules.md) |
 | `./setup.sh webpush` | Notifications on your phone, through the Life OS app (the core) | [Notifications](notifications.md) |
 | `./setup.sh feed` | A calendar feed (ICS), such as holidays or a sports team (the core); `feed list` and `feed remove <id>` list and remove them | [Calendar feeds](calendar-feeds.md) |
+| `./setup.sh email` | Email through your SMTP provider: verifying addresses, "Forgot password?", sign-in codes by email, security alerts (the core); `email test <address>` sends a test email, `email off` turns it off | [Email](email.md) |
 
 The phone and watch apps are on their own page: [Phone and watch apps](phone-apps.md).
 
@@ -148,6 +149,7 @@ Plain `docker compose` commands work too, from the same directory: `docker compo
 | AI with Claude Code | `LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN` (your Claude plan, from `claude setup-token`) or `LIFE_OS_ANTHROPIC_API_KEY` (an Anthropic API key, billed per use), not both; `LIFE_OS_CLAUDE_MODEL` (`sonnet`, `opus`, `haiku`, or a full model name; unset keeps the current one) |
 | Bank sync | `LIFE_OS_ENABLE_BANKING_APP_ID`, `LIFE_OS_ENABLE_BANKING_KEY_FILE` |
 | ntfy | `LIFE_OS_NTFY_PUBLIC_URL`, `LIFE_OS_SETUP_NTFY_PHONE_PASSWORD` |
+| Email (`./setup.sh email --yes`, not the first setup) | `--smtp-host`, `--smtp-port`, `--smtp-tls`, `--smtp-user`, `--smtp-from`, `--smtp-from-name`, `--test-to`, and `LIFE_OS_SETUP_SMTP_SECRET` for the password ([Email](email.md#set-it-up)) |
 | Phone app push | `LIFE_OS_SETUP_WEBPUSH=on`, and `LIFE_OS_WEBPUSH_SUBJECT` (`mailto:you@example.com`) without an https address |
 | A calendar feed | `LIFE_OS_SETUP_FEED_NAME`, `LIFE_OS_SETUP_FEED_URL` |
 
@@ -160,5 +162,6 @@ For example: `LIFE_OS_TIMEZONE=Europe/Berlin ./setup.sh --yes && ./setup.sh up`.
 - [Access it safely](access.md): [choose a way in](access.md#choose-a-way-in), from the SSH tunnel to HTTPS for every device.
 - [Backups and restore](backups.md), [Updating](updating.md), [Uninstalling](uninstall.md), [Troubleshooting](troubleshooting.md).
 - [Phone and watch apps](phone-apps.md).
+- [Email](email.md): account emails through your own SMTP provider.
 - Running Life OS from the source code, or developing it: [SETUP.md](../../SETUP.md), [Developing Life OS](../development/README.md), and the [technical documentation](../README.md).
 - Which downloads are official: [Official sources and name](../../README.md#official-sources-and-name).

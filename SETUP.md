@@ -106,6 +106,16 @@ Compose refuses every command until these five variables are set: `LIFE_OS_POSTG
 
 **Notifications and reminders** ([step 10](#10-notifications)). These are `LIFE_OS_NOTIFICATIONS_CHANNELS` (empty: notifications are only stored and shown in the Dashboard), `LIFE_OS_WEBPUSH_*`, and `LIFE_OS_NTFY_*` (with `LIFE_OS_NTFY_PUBLIC_URL`, ntfy's own public URL). Reminder times: `LIFE_OS_TASKS_SUMMARY_TIME`, `LIFE_OS_TASKS_MORNING_TIME`, `LIFE_OS_TASKS_EVENING_TIME`, `LIFE_OS_TASKS_TIMED_LEAD_MINUTES`, and `LIFE_OS_FOOD_EXPIRY_TIME`. The monitor: `LIFE_OS_MONITOR_INTERVAL_SECONDS` and `LIFE_OS_MONITOR_CONFIRMATIONS`.
 
+**Email** (optional, [step 10](#10-notifications)). Account emails through your SMTP provider; all empty (the default) is off, and the Dashboard offers no email option.
+
+| Setting | What to put |
+| --- | --- |
+| `LIFE_OS_SMTP_HOST` | The SMTP server, such as `smtp.resend.com`. Empty: email off. |
+| `LIFE_OS_SMTP_PORT` | Empty: 465 for `tls`, 587 for `starttls`, 25 for `none`. |
+| `LIFE_OS_SMTP_TLS` | `starttls` (empty), `tls`, or `none` (a relay on your own network, without a user or password). |
+| `LIFE_OS_SMTP_USERNAME`, `LIFE_OS_SMTP_SECRET` | The user, and its password or API key (a secret; not named `_PASSWORD`, which `setup.sh` generates). |
+| `LIFE_OS_SMTP_FROM`, `LIFE_OS_SMTP_FROM_NAME` | The From address your provider lets you send from, and its name (empty: `Life OS`). |
+
 **Integrations** ([step 11](#11-optional-integrations)). Optional. Each one reports "not configured" until its settings are set. `LIFE_OS_GOOGLE_REDIRECT_URI` and `LIFE_OS_BANKING_REDIRECT_URI` default to `LIFE_OS_PUBLIC_URL` plus the Dashboard's callback route.
 
 **Backups and server health**
@@ -294,6 +304,8 @@ With `LIFE_OS_NOTIFICATIONS_CHANNELS` empty, notifications are only stored and l
 4. Add `webpush` to `LIFE_OS_NOTIFICATIONS_CHANNELS` and run the same command again. To send a test push: `curl -X POST http://127.0.0.1:3000/api/notifications/v1/push/test -H 'Authorization: Bearer lo_tok_...'`, with an [API token](docs/install/accounts.md#api-tokens) that has Notifications: read and write (while legacy access is on, `-H 'X-Life-OS-Actor: dev:curl'` instead).
 
 Pushes travel through Google's FCM. Some networks, such as some corporate Wi-Fi, block it, and nothing in Life OS can work around that. See [Notifications → Web push](docs/services/notifications.md#web-push).
+
+**Email** (optional): account emails (verifying addresses, "Forgot password?", sign-in codes by email, security alerts) through your SMTP provider. `./setup.sh email` asks for the settings, writes them, recreates the notifications service, and sends a test email; by hand, set `LIFE_OS_SMTP_*` (above) and apply with `docker compose up -d --no-build --no-deps notifications`. Providers, limits, and troubleshooting: [Email](docs/install/email.md).
 
 **ntfy** is an optional, self-hosted alternative (profile `ntfy`, channel `ntfy`). It is [paused](docs/operations/ntfy.md#paused-since-2026-10-12) on the reference deployment. It needs a hostname and tunnel route of its own, *without* Access, plus a publisher token and two bcrypt password hashes. Set `LIFE_OS_NTFY_PUBLIC_URL` to its public URL, such as `https://ntfy.example.com`. Setup is in [ntfy](docs/operations/ntfy.md).
 

@@ -30,6 +30,10 @@ export function authErrorMessage(error: BetterAuthError, fallback: string) {
       return "That code is not right. Check the time on your phone, then try the newest code.";
     case "INVALID_BACKUP_CODE":
       return "That recovery code is not right, or was already used.";
+    case "OTP_HAS_EXPIRED":
+      return "That code expired, or a newer one was sent. Ask for a new code.";
+    case "TOO_MANY_ATTEMPTS_REQUEST_NEW_CODE":
+      return "Too many wrong codes. Ask for a new code.";
     case "BANNED_USER":
       return "This account is disabled. Ask the server's owner.";
     case "USERNAME_IS_ALREADY_TAKEN":

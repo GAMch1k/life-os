@@ -1,6 +1,10 @@
 import { Pool } from "pg";
 
+import { resolveTimeZone } from "../time-zone";
 import { type CheckRuntime, LegacyCache } from "./check";
+import { EmailLimiter } from "./email-account";
+import { processEmailOutbox, registerOutbox } from "./email-alerts";
+import { emailService } from "./email-service";
 import { readAuthEnv } from "./env";
 import {
   assertSignerTrusted,
@@ -54,15 +58,57 @@ export function createRuntime(
     deps.fetch,
   );
   let cleaning: Promise<void> | null = null;
+  // Email (docs/install/email.md): through the notifications service, on
+  // when its SMTP settings are; the security alerts' outbox is sent at
+  // once and every minute, one run at a time.
+  const email = emailService(source.NOTIFICATIONS_SERVICE_URL, deps.fetch);
+  const emailLimiter = new EmailLimiter();
+  let alerting: Promise<void> | null = null;
+  let again = false;
+  const emailAlerts = (): Promise<void> => {
+    if (alerting) {
+      again = true;
+      return alerting;
+    }
+    alerting = processEmailOutbox({
+      pool,
+      email,
+      publicUrl: env.publicUrl,
+      timeZone: resolveTimeZone(source.LIFE_OS_TIMEZONE),
+    })
+      .then(() => undefined)
+      .catch((error) =>
+        console.error(
+          "email: security alerts will be retried",
+          (error as Error).message,
+        ),
+      )
+      .finally(() => {
+        alerting = null;
+        if (again) {
+          again = false;
+          void emailAlerts();
+        }
+      });
+    return alerting;
+  };
+  registerOutbox(pool, {
+    enabled: () => (email ? email.known() : false),
+    kick: () => void emailAlerts(),
+  });
+  const authDeps = { throttle, email, emailLimiter };
   return {
     env,
     pool,
-    auth: createAuth(env, pool, { kind: "secure", throttle }),
-    loopbackAuth: createAuth(env, pool, { kind: "loopback", throttle }),
+    auth: createAuth(env, pool, { kind: "secure", ...authDeps }),
+    loopbackAuth: createAuth(env, pool, { kind: "loopback", ...authDeps }),
     insecureAuth:
       env.insecureLoginHosts.length > 0
-        ? createAuth(env, pool, { kind: "insecure", throttle })
+        ? createAuth(env, pool, { kind: "insecure", ...authDeps })
         : undefined,
+    email,
+    emailLimiter,
+    emailAlerts,
     signer,
     tokens: new TokenCache(),
     legacy: new LegacyCache(pool, env.legacyAccessDefault),
@@ -137,9 +183,11 @@ export function startSecurityLog(rt: CheckRuntime) {
     );
   void revocations();
   setInterval(() => void rt.legacyUses?.flush(), 60_000).unref();
+  void rt.emailAlerts?.();
   setInterval(() => {
     void rt.keyCleanup?.();
     void revocations();
+    void rt.emailAlerts?.();
   }, 60_000).unref();
   setInterval(prune, 24 * 60 * 60 * 1000).unref();
 }

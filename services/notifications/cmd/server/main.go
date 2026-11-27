@@ -14,6 +14,7 @@ import (
 	"github.com/GAMch1k/life-os/services/notifications/internal/api"
 	serviceconfig "github.com/GAMch1k/life-os/services/notifications/internal/config"
 	"github.com/GAMch1k/life-os/services/notifications/internal/delivery"
+	"github.com/GAMch1k/life-os/services/notifications/internal/email"
 	repository "github.com/GAMch1k/life-os/services/notifications/internal/repository/generated"
 )
 
@@ -73,6 +74,18 @@ func run(ctx context.Context) error {
 		logger.Info("notification channels configured", "channels", delivery.Names(channels))
 	}
 
+	// Email (docs/install/email.md) is optional: off without a host, and
+	// off with settings that cannot work, which Status then names.
+	mailer := email.NewMailer(cfg.EmailSettings(), nil, queries, logger)
+	switch {
+	case mailer.Configured():
+		logger.Info("email configured", "smtp", mailer.Config().String())
+	case mailer.Problem() != "":
+		logger.Error("email is off: its settings cannot work", "problem", mailer.Problem())
+	default:
+		logger.Info("email is off (no NOTIFICATIONS_SMTP_HOST)")
+	}
+
 	app := httpserver.New(
 		cfg.ServiceName,
 		httpserver.WithLogger(logger),
@@ -89,7 +102,7 @@ func run(ctx context.Context) error {
 		Lease:       serviceconfig.Seconds(cfg.LeaseSeconds),
 		SendTimeout: serviceconfig.Seconds(cfg.SendTimeoutSeconds),
 	}, emitter, logger)
-	handler := api.NewHandler(pool, delivery.Names(channels)).WithWake(worker.Wake).WithActivity(emitter)
+	handler := api.NewHandler(pool, delivery.Names(channels)).WithWake(worker.Wake).WithActivity(emitter).WithEmail(mailer)
 	if webPush != nil {
 		handler = handler.WithPush(webPush)
 	}

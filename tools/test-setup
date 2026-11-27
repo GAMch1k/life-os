@@ -97,6 +97,27 @@ case $1 in
               *) printf '@@status %s\n%s\n' "${STUB_FEED_STATUS:-201}" "${STUB_FEED_BODY:-{\}}" ;;
             esac
             ;;
+          # The notifications service's email API from the Dashboard's
+          # container (./setup.sh email, status): the action after the
+          # script, the body on stdin (logged as "email <action> <body>").
+          # ready answers 200 (000 with STUB_EMAIL_NOT_READY); status
+          # prints STUB_EMAIL_STATE's lines (state, last sent, failing since,
+          # the last error, the settings' problem); test answers
+          # STUB_EMAIL_STATUS (default 204) with STUB_EMAIL_BODY. No status
+          # at all (the Dashboard unreachable) with STUB_EMAIL_DOWN.
+          *'notifications:8080'*)
+            body=$(cat)
+            printf 'email %s %s\n' "$7" "$body" >>"$STUB_LOG"
+            if [[ -n ${STUB_EMAIL_DOWN:-} ]]; then
+              echo 'service "dashboard" is not running' >&2
+              exit 1
+            fi
+            case $7 in
+              ready) if [[ -n ${STUB_EMAIL_NOT_READY:-} ]]; then echo '@@status 000'; else echo '@@status 200'; fi ;;
+              status) printf '@@status 200\n%b\n' "${STUB_EMAIL_STATE:-idle\n\n\n\n}" ;;
+              test) printf '@@status %s\n%s\n' "${STUB_EMAIL_STATUS:-204}" "${STUB_EMAIL_BODY:-}" ;;
+            esac
+            ;;
           # The readiness probe in the Dashboard's container: the services
           # named after the script that answer (all but STUB_NOT_READY).
           'exec -T dashboard node -e '*)
@@ -1179,7 +1200,178 @@ ok 'status: google set up' grep -qE 'Google Calendar \(google-calendar\) +on: se
 ok 'status: AI processing is off' grep -qE 'AI processing \(ai\) +off$' "$case_dir.last"
 ok 'status: the Whisper model and language' grep -qE 'Voice notes \(voice\) +on: Whisper medium, language ru$' "$case_dir.last"
 ok 'status: server health is off' grep -qE 'Server health \(server-health\) +off$' "$case_dir.last"
+ok 'status: email is not set up' grep -qE 'Email \(\./setup\.sh email\) +not set up$' "$case_dir.last"
+ok 'and asks the notifications service nothing about it' bash -c "! grep -q '^email ' '$case_dir.log'"
 ok 'no secret printed by status' no_secret_printed
+
+# ---------- Email ----------
+new_case email
+run LIFE_OS_TIMEZONE=UTC -- --yes
+for key in LIFE_OS_SMTP_HOST LIFE_OS_SMTP_PORT LIFE_OS_SMTP_TLS LIFE_OS_SMTP_USERNAME LIFE_OS_SMTP_SECRET LIFE_OS_SMTP_FROM LIFE_OS_SMTP_FROM_NAME; do
+  ok "a new .env has $key, empty: email off" has_line "$key="
+done
+smtp_secret=re_SmtpSecretValue123456
+: >"$case_dir.log"
+run LIFE_OS_SETUP_SMTP_SECRET="$smtp_secret" -- --yes email --smtp-host smtp.resend.com --smtp-tls tls \
+  --smtp-user resend --smtp-from lifeos@example.com --test-to you@example.com
+ok 'email' test "$status" -eq 0
+ok 'the host' test "$(value LIFE_OS_SMTP_HOST)" = smtp.resend.com
+ok 'the TLS mode' test "$(value LIFE_OS_SMTP_TLS)" = tls
+ok "tls's port" test "$(value LIFE_OS_SMTP_PORT)" = 465
+ok 'the user' test "$(value LIFE_OS_SMTP_USERNAME)" = resend
+ok 'the password, from the environment' test "$(value LIFE_OS_SMTP_SECRET)" = "$smtp_secret"
+ok 'the From address' test "$(value LIFE_OS_SMTP_FROM)" = lifeos@example.com
+ok 'the From name: Life OS' has_line "LIFE_OS_SMTP_FROM_NAME='Life OS'"
+ok '.env is still mode 600' test "$(mode "$case_dir/.env")" = 600
+ok 'no duplicate keys' no_duplicate_keys
+ok 'restarts the notifications service alone' logged 'docker compose up -d --no-deps notifications'
+ok 'and nothing else' bash -c "! grep 'compose up' '$case_dir.log' | grep -vq 'up -d --no-deps notifications'"
+ok 'waits for it to answer' logged 'email ready'
+ok "sends the test email from the Dashboard's container, the address on stdin" logged 'email test {"to":"you@example.com"}'
+ok 'as dev:setup' logged '"x-life-os-actor": "dev:setup"'
+ok 'never through the gateway' bash -c "! grep -q '^curl' '$case_dir.log'"
+ok 'says it went' output_has 'Test email sent to you@example.com'
+ok 'the password is never in a docker argument (ps, docker inspect)' bash -c "! grep -qF '$smtp_secret' '$case_dir.log'"
+ok 'nor printed' no_secret_printed
+
+: >"$case_dir.log"
+run STUB_EMAIL_STATUS=502 STUB_EMAIL_BODY='The mail server refused the user name or password (SMTP 535). (email_auth_failed)' -- email test you@example.com
+ok 'a test email that did not go out fails' test "$status" -eq 1
+ok 'says why, in plain words, with the code' output_has 'refused the user name or password (SMTP 535). (email_auth_failed)'
+ok 'and how to change the settings' output_has './setup.sh email'
+ok 'email test changes nothing' bash -c "! grep -q 'compose up' '$case_dir.log'"
+run STUB_EMAIL_STATUS=409 -- email test you@example.com
+ok 'a service without the settings' test "$status" -eq 1
+ok 'says to run email again' output_has 'run ./setup.sh email again'
+run STUB_EMAIL_DOWN=1 -- email test you@example.com
+ok 'notifications unreachable' test "$status" -eq 1
+ok 'says so' output_has 'does not answer'
+run -- --yes email test
+ok 'email test --yes needs an address' test "$status" -eq 2
+run -- email test not-an-address
+ok 'email test refuses what is not an address' test "$status" -eq 2
+run -- email frobnicate
+ok 'an unknown email command' test "$status" -eq 2
+run -- --smtp-host smtp.example.com status
+ok 'the --smtp options are for email only' test "$status" -eq 2
+
+# Without --test-to under --yes: no test, and how to send one.
+: >"$case_dir.log"
+run -- --yes email --smtp-port 587 --smtp-tls starttls
+ok 'email again' test "$status" -eq 0
+ok 'keeps the host and password' test "$(value LIFE_OS_SMTP_HOST)/$(value LIFE_OS_SMTP_SECRET)" = "smtp.resend.com/$smtp_secret"
+ok 'the new mode and port' test "$(value LIFE_OS_SMTP_TLS)/$(value LIFE_OS_SMTP_PORT)" = starttls/587
+ok 'no test email' bash -c "! grep -q '^email test' '$case_dir.log'"
+ok 'says how to send one' output_has './setup.sh email test you@example.com'
+
+# Questions: the current values are the defaults; a new mode, its port.
+printf '%s\n' y '' tls '' apikey NewSmtpSecret987654 '' 'Home server' me@example.com >"$work/email-answers"
+stdin=$work/email-answers
+: >"$case_dir.log"
+run -- email
+stdin=/dev/null
+ok 'email, with questions' test "$status" -eq 0
+ok 'the host kept' test "$(value LIFE_OS_SMTP_HOST)" = smtp.resend.com
+ok "tls's port, for the new mode" test "$(value LIFE_OS_SMTP_PORT)" = 465
+ok 'the new user and password' test "$(value LIFE_OS_SMTP_USERNAME)/$(value LIFE_OS_SMTP_SECRET)" = apikey/NewSmtpSecret987654
+ok 'the From name' has_line "LIFE_OS_SMTP_FROM_NAME='Home server'"
+ok 'the test email' logged 'email test {"to":"me@example.com"}'
+ok 'the typed password is never printed' bash -c "! grep -qF NewSmtpSecret987654 '$case_out'"
+
+# A relay on your own network: no TLS, so no user or password.
+run LIFE_OS_SETUP_SMTP_SECRET=whatever123 -- --yes email --smtp-host postfix --smtp-tls none --smtp-from lifeos@example.com
+ok 'tls none with a password is refused' test "$status" -eq 2
+ok 'says why' output_has 'sends no password'
+run -- --yes email --smtp-host postfix --smtp-tls none --smtp-user someone --smtp-from lifeos@example.com
+ok 'tls none with a user is refused' test "$status" -eq 2
+run -- --yes email --smtp-host postfix --smtp-tls none --smtp-from lifeos@example.com
+ok 'a relay without TLS' test "$status" -eq 0
+ok 'port 25' test "$(value LIFE_OS_SMTP_PORT)" = 25
+ok 'no user or password kept' test "$(value LIFE_OS_SMTP_USERNAME)$(value LIFE_OS_SMTP_SECRET)" = ''
+run -- --yes email --smtp-host smtp.example.com --smtp-tls starttls --smtp-user someone --smtp-from lifeos@example.com
+ok 'a user needs a password' test "$status" -eq 2
+for bad in '--smtp-port 70000' '--smtp-port 0' '--smtp-tls ssl' '--smtp-from nobody' '--smtp-host smtp_bad!host'; do
+  # shellcheck disable=SC2086 # an option and its value
+  run -- --yes email $bad
+  ok "refuses $bad" test "$status" -eq 2
+done
+ok 'refused settings change nothing' test "$(value LIFE_OS_SMTP_HOST)" = postfix
+
+# Life OS not running: .env written, how to go on said.
+: >"$case_dir.log"
+run STUB_DASHBOARD_RUNNING=0 LIFE_OS_SETUP_SMTP_SECRET=token-1-secret-value -- --yes email --smtp-host smtp.postmarkapp.com \
+  --smtp-tls starttls --smtp-user token-1 --smtp-from lifeos@example.com --test-to you@example.com
+ok 'email while Life OS is down, with the password' test "$status" -eq 0
+ok 'writes .env all the same' test "$(value LIFE_OS_SMTP_HOST)" = smtp.postmarkapp.com
+ok 'says to start Life OS' output_has './setup.sh up'
+ok 'and how to test then' output_has './setup.sh email test you@example.com'
+ok 'no restart, no test' bash -c "! grep -qE 'compose up|^email ' '$case_dir.log'"
+run STUB_EMAIL_NOT_READY=1 -- --yes email --smtp-host smtp.postmarkapp.com --test-to you@example.com
+ok 'notifications that do not come back' test "$status" -eq 1
+ok 'says where to look' output_has 'docker compose logs notifications'
+
+# ./setup.sh status: never the user or password.
+run -- status
+ok 'status: email set up, nothing sent yet' grep -qE 'Email \(\./setup\.sh email\) +set up: nothing sent yet$' "$case_dir.last"
+run STUB_EMAIL_STATE='ok\n2026-11-27 10:00 UTC\n\n\n' -- status
+ok 'status: email works' grep -qE 'Email \(\./setup\.sh email\) +set up: works \(last sent 2026-11-27 10:00 UTC\)$' "$case_dir.last"
+run STUB_EMAIL_STATE='failing\n2026-11-26 09:00 UTC\n2026-11-27 08:00 UTC\nThe mail server refused the user name or password.\n' -- status
+ok 'status: email failing, since when, and why' grep -qE 'set up: FAILING since 2026-11-27 08:00 UTC: The mail server refused the user name or password\.$' "$case_dir.last"
+run STUB_EMAIL_STATE='invalid\n\n\n\nLIFE_OS_SMTP_TLS must be tls, starttls, or none' -- status
+ok 'status: wrong settings' grep -qE 'settings are wrong: LIFE_OS_SMTP_TLS must be tls, starttls, or none$' "$case_dir.last"
+run STUB_EMAIL_STATE='off\n\n\n\n' -- status
+ok 'status: settings not applied yet' grep -qE 'set up in \.env, not applied yet \(\./setup\.sh up\)$' "$case_dir.last"
+run STUB_DASHBOARD_RUNNING=0 -- status
+ok 'status: email set up, Life OS not running' grep -qE 'Email \(\./setup\.sh email\) +set up \(Life OS is not running\)$' "$case_dir.last"
+ok 'status never prints the user' bash -c "! grep -q 'token-1' '$case_dir.last'"
+ok 'no secret printed' no_secret_printed
+
+# email off: every setting empty, the notifications service told.
+: >"$case_dir.log"
+run -- email off
+ok 'email off' test "$status" -eq 0
+for key in LIFE_OS_SMTP_HOST LIFE_OS_SMTP_PORT LIFE_OS_SMTP_TLS LIFE_OS_SMTP_USERNAME LIFE_OS_SMTP_SECRET LIFE_OS_SMTP_FROM LIFE_OS_SMTP_FROM_NAME; do
+  ok "email off empties $key" has_line "$key="
+done
+ok 'restarts the notifications service' logged 'docker compose up -d --no-deps notifications'
+ok 'says what happens to sign-in codes by email' output_has 'recover-owner --reset-2fa'
+ok 'no duplicate keys' no_duplicate_keys
+run -- status
+ok 'status: email off again' grep -qE 'Email \(\./setup\.sh email\) +not set up$' "$case_dir.last"
+
+# In a clone, the notifications service is recreated without a build.
+new_case email-checkout
+mkdir "$case_dir/.git"
+run LIFE_OS_TIMEZONE=UTC -- --yes
+: >"$case_dir.log"
+run -- --yes email --smtp-host postfix --smtp-tls none --smtp-from lifeos@example.com --test-to you@example.com
+ok 'email in a clone' test "$status" -eq 0
+ok 'recreates notifications without a build' logged 'docker compose up -d --no-build --no-deps notifications'
+ok 'and the test email' logged 'email test {"to":"you@example.com"}'
+run STUB_DASHBOARD_RUNNING=0 -- email off
+ok 'email off in a clone while it is down' test "$status" -eq 0
+ok 'says how to apply it' output_has 'docker compose up -d --no-build --no-deps notifications'
+
+# The script that runs in the Dashboard's container, with a stand-in for the
+# notifications service (its fetch): the status a line a field, times in
+# UTC, an error in plain words with its code, the address from stdin, and
+# nothing the service said reaches the terminal with control characters.
+if command -v node >/dev/null 2>&1; then
+  email_script=$(sed -n "/^email_script='/,/^}'\$/p" setup.sh | sed "1s/^email_script='//; \$s/'\$//")
+  # shellcheck disable=SC2016 # JavaScript, run by node
+  stand_in='globalThis.fetch = async (url, init) => url.endsWith("/v1/email/status")
+    ? new Response(JSON.stringify({configured: true, state: "failing", problem: null, lastSuccessAt: "2026-11-26T09:00:00Z", lastFailureAt: "2026-11-27T08:00:30Z", failingSince: "2026-11-27T08:00:30Z", lastErrorCode: "email_auth_failed", lastError: "refused\u001b[31m\nnext"}), {status: 200})
+    : new Response(JSON.stringify({error: {code: "email_auth_failed", message: `refused for ${init.body}\u0007`}}), {status: 502});'
+  shown=$(node -e "$stand_in$email_script" status <<<'' 2>&1)
+  ok 'the email script prints its status line' test "$(head -n 1 <<<"$shown")" = '@@status 200'
+  ok 'the state' test "$(sed -n 2p <<<"$shown")" = failing
+  ok 'the last error, on one line' test "$(sed -n 5p <<<"$shown")" = 'refused [31m next'
+  ok 'times in UTC' test "$(sed -n 3p <<<"$shown")/$(sed -n 4p <<<"$shown")" = '2026-11-26 09:00 UTC/2026-11-27 08:00 UTC'
+  ok 'no control character from the service reaches the terminal' bash -c "! tail -n +2 <<<'$(tail -n +2 <<<"$shown")' | LC_ALL=C grep -q '[[:cntrl:]]'"
+  tested=$(node -e "$stand_in$email_script" test <<<'{"to":"you@example.com"}' 2>&1)
+  ok 'a failed test: its status' test "$(head -n 1 <<<"$tested")" = '@@status 502'
+  ok 'the message and the code, the address from stdin' grep -qF 'refused for {"to":"you@example.com"}  (email_auth_failed)' <<<"$tested"
+fi
 
 # ---------- Claude Code instead of Codex ----------
 new_case claude

@@ -23,6 +23,15 @@ type Delivery struct {
 	UpdatedAt      pgtype.Timestamptz
 }
 
+type EmailStatus struct {
+	ID            int16
+	LastSuccessAt pgtype.Timestamptz
+	LastFailureAt pgtype.Timestamptz
+	FailingSince  pgtype.Timestamptz
+	LastErrorCode *string
+	UpdatedAt     pgtype.Timestamptz
+}
+
 type Notification struct {
 	ID            pgtype.UUID
 	Title         string

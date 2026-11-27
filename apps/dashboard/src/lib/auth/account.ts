@@ -1,5 +1,6 @@
 import { credentialsRoute } from "./account-credentials";
 import { type CheckRuntime, checkRequest, type Principal } from "./check";
+import { emailRoute } from "./email-routes";
 import type { ServerRole } from "./constants";
 import { recentlyAuthenticated } from "./reauth";
 import { hasSecondFactor } from "./roles";
@@ -180,6 +181,8 @@ export async function accountHandler(
 
   const credentials = await credentialsRoute(rt, request, principal, pathname);
   if (credentials) return credentials;
+  const email = await emailRoute(rt, request, principal, pathname);
+  if (email) return email;
 
   if (pathname === "/api/account/sessions" && request.method === "GET") {
     return json(200, { sessions: await listSessions(rt, principal) });

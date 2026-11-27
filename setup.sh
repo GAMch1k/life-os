@@ -13,6 +13,7 @@
 #   ./setup.sh modules [on|off ID...]
 #                               the optional modules: list, turn on, turn off
 #   ./setup.sh setup-code       a one-time code for the first account
+#   ./setup.sh email [test|off] sending email through your SMTP provider
 #   ./setup.sh restore [DAY]    put Life OS back as a backup has it
 #   ./setup.sh help             every command and option
 #
@@ -86,6 +87,17 @@ env_mode=0
 dir_flag=
 uid_flag=
 docker_gid_flag=
+# ./setup.sh email only: the SMTP settings without questions. The password is
+# never a flag (ps and docker inspect show arguments): it comes from
+# LIFE_OS_SETUP_SMTP_SECRET in the environment.
+smtp_host_flag=
+smtp_port_flag=
+smtp_tls_flag=
+smtp_user_flag=
+smtp_user_given=0
+smtp_from_flag=
+smtp_from_name_flag=
+test_to_flag=
 
 # ---------- Output ----------
 
@@ -2211,6 +2223,309 @@ setup_feed() {
   fi
 }
 
+# ---------- Email ----------
+
+# The notifications service's email API (docs/install/email.md), called from
+# inside the Dashboard's container, on Life OS's private network, as
+# feeds_call does. The action is the one argument: ready (waits up to a
+# minute for the service to answer, after a restart), status (the state and
+# its times, one field a line: state, last sent, failing since, the last
+# error, the settings' problem; times in UTC), or test (the JSON body
+# {"to": …} on stdin, never as an argument). Prints "@@status <code>" (000
+# when notifications does not answer), then the answer: for an error, its
+# message and code. Control characters become spaces. It never sees the
+# SMTP password, which only the notifications service reads from .env.
+# shellcheck disable=SC2016 # JavaScript, run by node
+email_script='const [action] = process.argv.slice(1);
+const clean = (value) => String(value ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+const base = "http://notifications:8080";
+const time = (value) => (value ? new Date(value).toISOString().slice(0, 16).replace("T", " ") + " UTC" : "");
+const down = (error) => {
+  console.log("@@status 000");
+  console.log(clean(error.message));
+};
+const call = (method, path, body) => fetch(base + path, {
+  method,
+  headers: { "content-type": "application/json", "x-life-os-actor": "dev:setup" },
+  body: body || undefined,
+  signal: AbortSignal.timeout(60000),
+});
+const answer = async (response) => {
+  const text = await response.text();
+  console.log(`@@status ${response.status}`);
+  if (response.ok && action === "status") {
+    const s = JSON.parse(text);
+    console.log([s.state, time(s.lastSuccessAt), time(s.failingSince), s.lastError, s.problem].map(clean).join("\n"));
+    return;
+  }
+  if (response.ok) return;
+  let line = text;
+  try {
+    const error = JSON.parse(text).error;
+    if (error) line = `${error.message} (${error.code})`;
+  } catch {}
+  console.log(clean(line));
+};
+if (action === "ready") {
+  const deadline = Date.now() + 60000;
+  const poll = () => fetch(`${base}/ready`, { signal: AbortSignal.timeout(4000) }).then((r) => r.ok, () => false).then((ok) => {
+    if (ok) return console.log("@@status 200");
+    if (Date.now() > deadline) return console.log("@@status 000");
+    return new Promise((resolve) => setTimeout(resolve, 2000)).then(poll);
+  });
+  poll();
+} else if (action === "status") {
+  call("GET", "/v1/email/status").then(answer, down);
+} else if (action === "test") {
+  call("POST", "/v1/email/test", require("fs").readFileSync(0, "utf8").trim()).then(answer, down);
+}'
+
+email_status=
+email_body=
+
+# email_call ACTION [BODY]: sets email_status and email_body, as feeds_call
+# does: only the script's own "@@status" line counts; Compose's warnings on
+# stderr show only when no status came.
+email_call() {
+  local out err
+  err=$(mktemp)
+  out=$(docker compose exec -T dashboard node -e "$email_script" "$1" <<<"${2:-}" 2>"$err") || true
+  email_status=$(sed -n 's/^@@status \([0-9]\{3\}\)$/\1/p' <<<"$out" | head -n 1)
+  if [[ -n $email_status ]]; then
+    email_body=$(awk 'seen { print } /^@@status [0-9][0-9][0-9]$/ { seen = 1 }' <<<"$out")
+  else
+    email_status=000
+    email_body=$(tr -d '\000-\010\013-\037\177' <"$err")
+  fi
+  rm -f "$err"
+}
+
+# The settings ./setup.sh email writes; email off empties them.
+email_keys=(LIFE_OS_SMTP_HOST LIFE_OS_SMTP_PORT LIFE_OS_SMTP_TLS LIFE_OS_SMTP_USERNAME
+  LIFE_OS_SMTP_SECRET LIFE_OS_SMTP_FROM LIFE_OS_SMTP_FROM_NAME)
+
+# An address one email goes to or comes from: name@domain, without spaces,
+# quotes, or backslashes (it goes into JSON and .env as it is).
+valid_email() {
+  [[ ${#1} -le 254 && $1 =~ ^[^@[:space:][:cntrl:]\"\'\\]+@[^@[:space:][:cntrl:]\"\'\\]+\.[^@[:space:][:cntrl:]\"\'\\]+$ ]]
+}
+
+# The port an SMTP server usually listens on for a TLS mode.
+email_default_port() {
+  case $1 in
+    tls) printf '465\n' ;;
+    none) printf '25\n' ;;
+    *) printf '587\n' ;;
+  esac
+}
+
+# Recreates the notifications service alone (--no-deps), so it reads the new
+# settings, and waits until it answers. Returns 1, with what to do instead,
+# when Life OS is not running here.
+email_restart() {
+  if ! command -v docker >/dev/null 2>&1 || ! dashboard_running; then
+    if is_checkout; then
+      say 'Apply it with: docker compose up -d --no-build --no-deps notifications'
+    else
+      say 'Life OS is not running: start it with ./setup.sh up.'
+    fi
+    return 1
+  fi
+  step 'Restarting the notifications service'
+  if is_checkout; then
+    docker compose up -d --no-build --no-deps notifications || die 'restarting the notifications service failed (above)'
+  else
+    docker compose up -d --no-deps notifications || die 'restarting the notifications service failed (above)'
+  fi
+  email_call ready
+  [[ $email_status == 200 ]] \
+    || die 'the notifications service did not answer within a minute: see docker compose logs notifications'
+}
+
+# Sends the test email to $1 and says how it went; exits 1 when it did not
+# go out.
+email_send_test() {
+  local to=$1
+  valid_email "$to" || usage_error "'$to' is not an email address such as you@example.com"
+  email_call test "{\"to\":\"$to\"}"
+  case $email_status in
+    204)
+      say "Test email sent to $to: check its inbox (and spam folder)."
+      ;;
+    000) die "the notifications service does not answer; is Life OS running? (./setup.sh status): $email_body" ;;
+    409) die 'the notifications service runs without the email settings: run ./setup.sh email again, which restarts it with them' ;;
+    *)
+      printf 'setup: the test email did not go out: %s\n' "${email_body:-HTTP $email_status}" >&2
+      printf 'The settings stay in .env. Change them with ./setup.sh email (%s).\n' "$docs/email.md" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# email [test [ADDRESS] | off]: sending email through your SMTP provider.
+setup_email() {
+  local action=${1:-}
+  case $action in
+    '') ;;
+    test)
+      email_test "${2:-}"
+      return
+      ;;
+    off)
+      email_off
+      return
+      ;;
+    *) usage_error "unknown email command '$action': use ./setup.sh email, email test [ADDRESS], or email off" ;;
+  esac
+  local host tls port user secret from from_name to current_port current_tls
+  intro 'Email' email.md
+  require_env
+  host=$(env_get LIFE_OS_SMTP_HOST 2>/dev/null || true)
+  if [[ -n $host && -z $smtp_host_flag$smtp_port_flag$smtp_tls_flag$smtp_from_flag$smtp_from_name_flag && $smtp_user_given == 0 ]]; then
+    change_existing 'Email' || {
+      say 'Nothing was changed. ./setup.sh email test you@example.com sends a test email.'
+      return 0
+    }
+  fi
+  cat <<'EOF'
+Life OS sends its account emails (verifying your address, password reset
+links, sign-in codes, security alerts) through your SMTP provider: Resend,
+Postmark, Brevo, Mailgun, Amazon SES, Fastmail, Gmail with an app password,
+or your own mail server. The password stays in .env.
+EOF
+  ask host 'SMTP server (host name)' "${smtp_host_flag:-$host}"
+  [[ -n $host ]] || usage_error 'the SMTP server is missing (./setup.sh email off turns email off)'
+  [[ ${#host} -le 253 && $host =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+    || usage_error "'$host' is not a host name such as smtp.example.com"
+  current_tls=$(env_get LIFE_OS_SMTP_TLS 2>/dev/null || true)
+  current_tls=${current_tls:-starttls}
+  ask tls 'TLS: starttls (port 587), tls (port 465), or none (a relay on your own network)' "${smtp_tls_flag:-$current_tls}"
+  tls=${tls,,}
+  case $tls in
+    tls | starttls | none) ;;
+    *) usage_error "the TLS mode is tls, starttls, or none, not '$tls'" ;;
+  esac
+  # The current port while the mode stays, else the mode's usual one.
+  current_port=$(env_get LIFE_OS_SMTP_PORT 2>/dev/null || true)
+  [[ $tls == "$current_tls" && -n $current_port ]] || current_port=$(email_default_port "$tls")
+  ask port 'Port' "${smtp_port_flag:-$current_port}"
+  if [[ ! $port =~ ^[1-9][0-9]{0,4}$ ]] || ((port > 65535)); then
+    usage_error "the port must be a number from 1 to 65535, not '$port'"
+  fi
+  if [[ $tls == none ]]; then
+    # Without TLS a password would cross the network in the clear: a relay
+    # on your own network takes mail without one.
+    if [[ -n $smtp_user_flag || -n ${LIFE_OS_SETUP_SMTP_SECRET:-} ]]; then
+      usage_error 'with --smtp-tls none Life OS sends no password: use starttls or tls, or leave the user empty for a relay that needs none'
+    fi
+    user='' secret=''
+  else
+    user=$(env_get LIFE_OS_SMTP_USERNAME 2>/dev/null || true)
+    ((!smtp_user_given)) || user=$smtp_user_flag
+    ((smtp_user_given)) || ask user 'User name (empty if the server needs none)' "$user"
+    [[ ! $user =~ [[:space:][:cntrl:]\"\'\\] && ${#user} -le 254 ]] || usage_error 'the user name has spaces, quotes, or backslashes'
+    secret=''
+    if [[ -n $user ]]; then
+      secret=${LIFE_OS_SETUP_SMTP_SECRET:-}
+      if [[ -z $secret ]] && ((!assume_yes)); then
+        ask_secret secret 'Password or API key (input is hidden; empty keeps the current one)'
+      fi
+      [[ -n $secret ]] || secret=$(env_get LIFE_OS_SMTP_SECRET 2>/dev/null || true)
+      [[ -n $secret ]] || usage_error 'a user needs its password or API key: type it, or set LIFE_OS_SETUP_SMTP_SECRET with --yes'
+      [[ ! $secret =~ [[:cntrl:]\'] ]] || usage_error 'the password has a quote or a control character, which .env cannot hold'
+    fi
+  fi
+  from=$(env_get LIFE_OS_SMTP_FROM 2>/dev/null || true)
+  ask from 'From address (one your provider lets you send from)' "${smtp_from_flag:-$from}"
+  valid_email "$from" || usage_error "the From address must be an address such as lifeos@example.com, not '$from'"
+  from_name=$(env_get LIFE_OS_SMTP_FROM_NAME 2>/dev/null || true)
+  ask from_name 'From name' "${smtp_from_name_flag:-${from_name:-Life OS}}"
+  [[ ${#from_name} -le 64 && ! $from_name =~ [[:cntrl:]\"\'\\\<\>] ]] \
+    || usage_error 'the From name has quotes, backslashes, angle brackets, or more than 64 characters'
+  env_values[LIFE_OS_SMTP_HOST]=$host
+  env_values[LIFE_OS_SMTP_PORT]=$port
+  env_values[LIFE_OS_SMTP_TLS]=$tls
+  env_values[LIFE_OS_SMTP_USERNAME]=$user
+  env_values[LIFE_OS_SMTP_SECRET]=$secret
+  env_values[LIFE_OS_SMTP_FROM]=$from
+  env_values[LIFE_OS_SMTP_FROM_NAME]=$from_name
+  env_update
+  say "Email settings written to .env: $host, port $port, $tls, from $from."
+  if ! email_restart; then
+    say 'Then send a test email: ./setup.sh email test you@example.com'
+    return 0
+  fi
+  to=$test_to_flag
+  if [[ -z $to ]]; then
+    if ((assume_yes)); then
+      say 'Send a test email with: ./setup.sh email test you@example.com'
+      return 0
+    fi
+    ask to 'Send a test email to (your address)'
+  fi
+  email_send_test "$to"
+}
+
+# email test [ADDRESS]: a test email with the settings the notifications
+# service runs with.
+email_test() {
+  local to=${1:-$test_to_flag}
+  require_env
+  [[ -n $(env_get LIFE_OS_SMTP_HOST 2>/dev/null || true) ]] || die 'email is not set up: run ./setup.sh email first'
+  require_dashboard
+  if [[ -z $to ]]; then
+    ((!assume_yes)) || usage_error 'email test needs the address to send to: ./setup.sh email test you@example.com'
+    ask to 'Send a test email to (your address)'
+  fi
+  email_send_test "$to"
+}
+
+# email off: every SMTP setting empty, and the notifications service told.
+email_off() {
+  local key
+  require_env
+  for key in "${email_keys[@]}"; do
+    env_values[$key]=
+  done
+  env_update
+  say 'Email is off: the SMTP settings in .env are empty, and Life OS offers no email option.'
+  say 'Accounts whose only second factor is a sign-in code by email sign in with a recovery code, or the owner with ./setup.sh recover-owner --reset-2fa.'
+  email_restart || true
+}
+
+# The Email line of ./setup.sh status: never the user or password.
+email_status_text() {
+  local -a fields=()
+  if [[ -z $(env_get LIFE_OS_SMTP_HOST 2>/dev/null || true) ]]; then
+    printf 'not set up'
+    return
+  fi
+  if ! command -v docker >/dev/null 2>&1 || ! dashboard_running; then
+    printf 'set up (Life OS is not running)'
+    return
+  fi
+  email_call status
+  if [[ $email_status != 200 ]]; then
+    printf 'set up (the notifications service does not answer)'
+    return
+  fi
+  mapfile -t fields <<<"$email_body"
+  case ${fields[0]:-} in
+    ok) printf 'set up: works (last sent %s)' "${fields[1]:-}" ;;
+    idle) printf 'set up: nothing sent yet' ;;
+    failing) printf 'set up: FAILING since %s: %s' "${fields[2]:-}" "${fields[3]:-}" ;;
+    invalid) printf 'settings are wrong: %s' "${fields[4]:-}" ;;
+    off)
+      if is_checkout; then
+        printf 'set up in .env, not applied yet (docker compose up -d --no-build --no-deps notifications)'
+      else
+        printf 'set up in .env, not applied yet (./setup.sh up)'
+      fi
+      ;;
+    *) printf 'set up (the notifications service did not say how it goes)' ;;
+  esac
+}
+
 # Whether $1 is an IPv4 address: four numbers 0 to 255, no leading zeros.
 proxy_ipv4() {
   local octet='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
@@ -2937,6 +3252,7 @@ cmd_status() {
     || say 'This .env is from before modules: ./setup.sh up or update turns on the modules this install used.'
   step 'Set up'
   status_line 'Phone app push (webpush)' "$(on_off list_has LIFE_OS_NOTIFICATIONS_CHANNELS webpush)"
+  status_line 'Email (./setup.sh email)' "$(email_status_text)"
   say "The Status page in Life OS ($gateway/status) has the details."
 }
 
@@ -3050,6 +3366,11 @@ Set up a module (which turns it on), or another integration, any time:
   ./setup.sh webpush            push notifications to the Life OS phone app
   ./setup.sh feed               subscribe to a calendar feed (ICS); feed list
                                 lists them, feed remove ID removes one
+  ./setup.sh email              send email through your SMTP provider (account
+                                emails: verifying addresses, password reset
+                                links, sign-in codes, security alerts), then a
+                                test email; email test [ADDRESS] sends one
+                                again, email off turns email off
 
 Options:
   -y, --yes                no questions: defaults, or values from the
@@ -3083,6 +3404,16 @@ Options:
   --skip-checks            don't check Docker, memory, and disk first
   --skip-backup            update or restore without backing up first
   --skip-access-check      cloudflare: don't check that Access protects the hostname
+  --smtp-host HOST         email: the SMTP server, such as smtp.example.com
+  --smtp-port PORT         email: its port (default: 587, 465 for tls, 25 for none)
+  --smtp-tls MODE          email: starttls (default), tls, or none (a relay on
+                           your own network, without a user)
+  --smtp-user USER         email: the user name (--smtp-user= for none); the
+                           password comes from LIFE_OS_SETUP_SMTP_SECRET in
+                           the environment, never from an option
+  --smtp-from ADDRESS      email: the From address
+  --smtp-from-name NAME    email: the From name (default Life OS)
+  --test-to ADDRESS        email: where the test email goes
 
 Guide: $docs/README.md
 EOF
@@ -3504,6 +3835,20 @@ while (($#)); do
     --uid=*) uid_flag=${1#*=} ;;
     --docker-gid) need_value "$@" && docker_gid_flag=$2 && shift ;;
     --docker-gid=*) docker_gid_flag=${1#*=} ;;
+    --smtp-host) need_value "$@" && smtp_host_flag=$2 && shift ;;
+    --smtp-host=*) smtp_host_flag=${1#*=} ;;
+    --smtp-port) need_value "$@" && smtp_port_flag=$2 && shift ;;
+    --smtp-port=*) smtp_port_flag=${1#*=} ;;
+    --smtp-tls) need_value "$@" && smtp_tls_flag=$2 && shift ;;
+    --smtp-tls=*) smtp_tls_flag=${1#*=} ;;
+    --smtp-user) need_value "$@" && smtp_user_flag=$2 && smtp_user_given=1 && shift ;;
+    --smtp-user=*) smtp_user_flag=${1#*=} smtp_user_given=1 ;;
+    --smtp-from) need_value "$@" && smtp_from_flag=$2 && shift ;;
+    --smtp-from=*) smtp_from_flag=${1#*=} ;;
+    --smtp-from-name) need_value "$@" && smtp_from_name_flag=$2 && shift ;;
+    --smtp-from-name=*) smtp_from_name_flag=${1#*=} ;;
+    --test-to) need_value "$@" && test_to_flag=$2 && shift ;;
+    --test-to=*) test_to_flag=${1#*=} ;;
     -h | --help) command=help ;;
     -*) usage_error "unknown option $1" ;;
     *)
@@ -3520,6 +3865,9 @@ if [[ ${command:-init} != env ]] && { ((env_stdout)) || [[ -n $dir_flag$uid_flag
 fi
 if [[ ${command:-init} != init && ${command:-init} != env && -n $timezone_flag$currency_flag ]]; then
   usage_error '--timezone and --currency are for the first setup and ./setup.sh env'
+fi
+if [[ ${command:-init} != email ]] && { [[ -n $smtp_host_flag$smtp_port_flag$smtp_tls_flag$smtp_from_flag$smtp_from_name_flag$test_to_flag ]] || ((smtp_user_given)); }; then
+  usage_error '--smtp-* and --test-to are for ./setup.sh email'
 fi
 
 case ${command:-init} in
@@ -3540,6 +3888,7 @@ case ${command:-init} in
   ntfy) setup_ntfy ;;
   webpush) setup_webpush ;;
   feed) setup_feed "${args[@]}" ;;
+  email) setup_email "${args[@]}" ;;
   account-keys) cmd_account_keys ;;
   setup-code) cmd_setup_code ;;
   recover-owner) cmd_recover_owner ;;

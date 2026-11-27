@@ -8,6 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/oapi-codegen/runtime v1.9.0
+	github.com/wneessen/go-mail v0.8.2
 )
 
 require (

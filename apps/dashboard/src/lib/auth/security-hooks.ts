@@ -61,7 +61,12 @@ type HookContext = {
 /** The user (and session) a request was made by, before the endpoint ran. */
 const before = new WeakMap<
   object,
-  { userId: string | null; sessionId?: string | null }
+  {
+    userId: string | null;
+    sessionId?: string | null;
+    /** /two-factor/verify-totp: the authenticator was verified before. */
+    totpVerified?: boolean;
+  }
 >();
 
 /**
@@ -69,6 +74,11 @@ const before = new WeakMap<
  * found it: the after hooks read it once Better Auth has deleted the token.
  */
 export function resetPasswordUser(context: object): string | null {
+  return before.get(context)?.userId ?? null;
+}
+
+/** The signed-in user a request was made by, as the before hook found it. */
+export function requestUser(context: object): string | null {
   return before.get(context)?.userId ?? null;
 }
 
@@ -126,7 +136,7 @@ function failure(returned: unknown): {
 }
 
 /** Before the endpoint: who makes the request, for the after hook. */
-export async function beforeSecurityHook(ctx: HookContext) {
+export async function beforeSecurityHook(ctx: HookContext, pool?: Pool) {
   if (ctx.path === "/reset-password") {
     // Whom a reset link is for: the token's verification names the user
     // (Better Auth deletes it once the password is set).
@@ -146,10 +156,27 @@ export async function beforeSecurityHook(ctx: HookContext) {
     user?: { id: string };
     session?: { id: string };
   } | null;
+  const userId = session?.user?.id ?? null;
   before.set(ctx.context, {
-    userId: session?.user?.id ?? null,
+    userId,
     sessionId: session?.session?.id ?? null,
+    totpVerified:
+      ctx.path === "/two-factor/verify-totp" && userId
+        ? await totpVerified(pool, userId)
+        : undefined,
   });
+}
+
+/** Whether the account's authenticator app is verified (turned on). */
+async function totpVerified(pool: Pool | undefined, userId: string) {
+  if (!pool) return false;
+  const { rows } = await pool
+    .query<{ ok: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM "twoFactor" WHERE "userId" = $1 AND verified IS NOT FALSE) AS ok`,
+      [userId],
+    )
+    .catch(() => ({ rows: [] as { ok: boolean }[] }));
+  return rows[0]?.ok === true;
 }
 
 /**
@@ -177,7 +204,7 @@ export async function markSecondFactor(
 }
 
 /** The user whose sign-in waits for a second factor (the two_factor cookie). */
-async function pendingTwoFactorUser(ctx: HookContext) {
+export async function pendingTwoFactorUser(ctx: HookContext) {
   try {
     if (!ctx.context.createAuthCookie || !ctx.getSignedCookie) return null;
     const cookie = ctx.context.createAuthCookie("two_factor");
@@ -292,15 +319,21 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
       const method =
         ctx.path === "/two-factor/verify-totp" ? "totp" : "recovery_code";
       if (actor) {
-        // Signed in already: turning two-factor on (the first code).
-        if (!failed && ctx.path === "/two-factor/verify-totp") {
+        // Signed in already: turning the authenticator app on (the first
+        // code). Better Auth starts a new session only when two-factor
+        // was off; with sign-in codes by email on, the session stays.
+        if (
+          !failed &&
+          ctx.path === "/two-factor/verify-totp" &&
+          before.get(ctx.context)?.totpVerified === false
+        ) {
           const { rows } = await pool
-            .query<{ enabled: boolean | null }>(
-              'SELECT "twoFactorEnabled" AS enabled FROM "user" WHERE id = $1',
+            .query<{ ok: boolean }>(
+              `SELECT EXISTS (SELECT 1 FROM "twoFactor" WHERE "userId" = $1 AND verified IS NOT FALSE) AS ok`,
               [actor],
             )
-            .catch(() => ({ rows: [] as { enabled: boolean | null }[] }));
-          if (rows[0]?.enabled && signedIn) {
+            .catch(() => ({ rows: [] as { ok: boolean }[] }));
+          if (rows[0]?.ok) {
             // The first code proves the authenticator: the session that
             // turned it on (Better Auth replaces it with a new one) counts
             // as signed in with it.
@@ -330,6 +363,24 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
           actor: signedIn,
           subject: signedIn,
           detail: method,
+        });
+      }
+      return;
+    }
+    case "/two-factor/verify-otp": {
+      // A sign-in code by email (P22-16): a sign-in with two-factor, but
+      // not the mfa the admin surfaces need (roles.ts hasSecondFactor).
+      if (failed) {
+        await recordFailedSignIn(pool, {
+          subjectUserId: await pendingTwoFactorUser(ctx),
+          headers,
+          detail: `email_code:${failed.code}`,
+        });
+      } else if (signedIn) {
+        await record("sign_in", {
+          actor: signedIn,
+          subject: signedIn,
+          detail: "email_code",
         });
       }
       return;

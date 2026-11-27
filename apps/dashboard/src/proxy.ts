@@ -14,7 +14,8 @@ import { suspiciousPath } from "@/lib/auth/scopes";
  * service through the development proxies (src/lib/service-proxy.ts) gets
  * the identity token, as the gateway gives it.
  *
- * Not here, by the matcher: the login, setup, and reset pages, Better
+ * Not here, by the matcher: the login, setup, reset, forgot-password, and
+ * verify-email pages (P22-16), Better
  * Auth's /api/auth/, /api/account/, /api/admin/, and /share (which check
  * themselves), /internal/ (the gateway answers it with 404 from outside),
  * the OAuth metadata under /.well-known/ (public), the privacy
@@ -148,6 +149,6 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|api/auth/|api/account|api/admin|internal/|\\.well-known/|login|setup|reset/|share$|privacy|terms|sw\\.js|icons/|app\\.webmanifest|favicon\\.ico).*)",
+    "/((?!_next/static|_next/image|api/auth/|api/account|api/admin|internal/|\\.well-known/|login|setup|reset/|forgot-password$|verify-email/|share$|privacy|terms|sw\\.js|icons/|app\\.webmanifest|favicon\\.ico).*)",
   ],
 };

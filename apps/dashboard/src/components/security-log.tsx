@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { ScrollText } from "lucide-react";
 
+import { authRuntime } from "@/lib/auth/runtime";
+
 import { DatePicker } from "@/components/date-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -66,13 +68,19 @@ function OutcomeBadge({ outcome }: { outcome: SecurityEvent["outcome"] }) {
 }
 
 /** The pages of Settings and of the server's admin, as links. */
-export function SettingsNav({
+export async function SettingsNav({
   admin,
   current,
 }: {
   admin: boolean;
   current: string;
 }) {
+  // Settings → Email only while email works on this server
+  // (docs/install/email.md).
+  const email =
+    (await authRuntime()
+      .email?.enabled()
+      .catch(() => false)) ?? false;
   const link = (href: string, label: string) => (
     <Link
       aria-current={current === href ? "page" : undefined}
@@ -92,6 +100,7 @@ export function SettingsNav({
       className="flex flex-wrap items-center gap-x-1 gap-y-2"
     >
       {link("/settings/security", "Security")}
+      {email ? link("/settings/email", "Email") : null}
       {link("/settings/devices", "Devices")}
       {link("/settings/tokens", "API tokens")}
       {link("/settings/connected-apps", "Connected apps")}

@@ -214,6 +214,15 @@ runs:
       env:
         LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/smoke-accounts
       run: timeout --kill-after=1m 10m tools/smoke-accounts
+    # Email (P22-16) with a throwaway SMTP catcher (Mailpit) on the stack's
+    # private network: the test email, verifying an address, a reset link,
+    # alerts, and a sign-in code, the core alone and legacy access off.
+    - name: Email end to end (tools/smoke-email)
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      shell: bash
+      env:
+        LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/smoke-email
+      run: timeout --kill-after=1m 10m tools/smoke-email
     # The one stack with legacy access off, as a new install: the first
     # account from a setup code, each browser's sign-in at the loopback
     # address of an SSH tunnel (WebKit too), and the smokes with a token.

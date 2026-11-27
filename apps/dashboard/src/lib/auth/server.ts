@@ -1,7 +1,11 @@
 import { apiKey } from "@better-auth/api-key";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { passkey } from "@better-auth/passkey";
-import { betterAuth, type BetterAuthOptions } from "better-auth";
+import {
+  betterAuth,
+  type BetterAuthOptions,
+  type BetterAuthPlugin,
+} from "better-auth";
 import {
   APIError,
   createAuthMiddleware,
@@ -30,6 +34,18 @@ import {
   SETUP_CODE_HEADER,
   TOKEN_MAX_DAYS,
 } from "./constants";
+import {
+  accountEmail,
+  type EmailLimiter,
+  LIMITS,
+  SIGN_IN_CODE_ATTEMPTS,
+  SIGN_IN_CODE_MINUTES,
+  signInCodesOn,
+  syncTwoFactorEnabled,
+} from "./email-account";
+import { queueAlert } from "./email-alerts";
+import { sendSignInCode } from "./email-routes";
+import type { EmailService } from "./email-service";
 import type { AuthEnv } from "./env";
 import {
   INSECURE_KNOWN_DEVICE_COOKIE,
@@ -51,11 +67,17 @@ import { hasSecondFactor, isFresh } from "./roles";
 import {
   beforeSecurityHook,
   isAdminAction,
+  pendingTwoFactorUser,
+  requestUser,
   resetPasswordUser,
   securityLogPlugin,
   userByUsername,
 } from "./security-hooks";
-import { recordSecurityEvent } from "./security-log";
+import {
+  clientAddress as logAddress,
+  deviceLabel,
+  recordSecurityEvent,
+} from "./security-log";
 import {
   accountCount,
   claimSetupCode,
@@ -69,7 +91,9 @@ import { ACCOUNT_FREE_FAILURES, LoginThrottle } from "./throttle";
  * own database, auth_db, whose schema is our migrations
  * (apps/dashboard/db/migrations), never Better Auth's at start. Only the
  * plugins P21-03 needs: username, admin (without impersonation), two-factor
- * (TOTP and ten recovery codes), and passkeys. Nothing is keyed by email.
+ * (TOTP and ten recovery codes; P22-16: sign-in codes by email), and
+ * passkeys. Nothing is keyed by email: an address only receives Life OS's
+ * emails once verified (src/lib/auth/email-account.ts).
  */
 
 // Server roles: the owner and admins manage accounts, never content, and
@@ -310,10 +334,46 @@ export function createAuth(
     kind?: AuthKind;
     throttle?: LoginThrottle;
     rateLimit?: boolean;
+    /** Email through the notifications service (docs/install/email.md). */
+    email?: EmailService | null;
+    emailLimiter?: EmailLimiter;
   } = {},
 ) {
   const kind = options.kind ?? "secure";
   const throttle = options.throttle ?? new LoginThrottle();
+  const email = options.email ?? null;
+  const emailLimiter = options.emailLimiter;
+  // Sign-in codes that did not go out (sendOTP cannot answer itself:
+  // Better Auth swallows its errors), and the username of a code's check,
+  // for the after hooks.
+  const codeNotSent = new WeakSet<object>();
+  const codeChecks = new WeakMap<object, string>();
+
+  /**
+   * A browser that never signed in to the account (no known-device cookie
+   * for it) signed in with the password or a passkey: its security alert
+   * (email-alerts.ts), at most LIMITS.newDevice an hour per account.
+   */
+  const alertNewDevice = async (
+    userId: string | null,
+    headers: Headers,
+    detail: "password" | "passkey",
+  ) => {
+    if (!userId || !email) return;
+    if (
+      (emailLimiter?.take(`new-device:${userId}`, LIMITS.newDevice) ?? 0) > 0
+    ) {
+      return;
+    }
+    await queueAlert(pool, {
+      userId,
+      kind: "new_device",
+      event: "sign_in",
+      detail,
+      address: logAddress(headers),
+      device: deviceLabel(headers),
+    });
+  };
   const knownDeviceCookie =
     kind === "secure" ? KNOWN_DEVICE_COOKIE : INSECURE_KNOWN_DEVICE_COOKIE;
   const publicUrl = new URL(env.publicUrl);
@@ -486,7 +546,96 @@ export function createAuth(
         }
 
         // Who makes the request, for the security log's entry afterwards.
-        await beforeSecurityHook(ctx);
+        await beforeSecurityHook(ctx, pool);
+
+        // Sign-in codes by email (P22-16) are turned on in Settings →
+        // Security (src/lib/auth/email-routes.ts), never by Better Auth's
+        // own switch, which knows nothing of the address.
+        if (
+          path === "/two-factor/enable" &&
+          (ctx.body as { method?: unknown } | undefined)?.method === "otp"
+        ) {
+          throw new APIError("BAD_REQUEST", {
+            code: "USE_SETTINGS",
+            message: "Turn sign-in codes by email on in Settings → Security.",
+          });
+        }
+        // A code is only for finishing a sign-in, to an account that turned
+        // codes on and verified its address, while email works; at most
+        // LIMITS.signInCode, and its check waits as a password's does after
+        // failures (throttle.ts).
+        if (
+          path === "/two-factor/send-otp" ||
+          path === "/two-factor/verify-otp"
+        ) {
+          const signedIn = await getSessionFromCtx(ctx).catch(() => null);
+          if (signedIn) {
+            throw new APIError("FORBIDDEN", {
+              code: "SIGNED_IN",
+              message: "Sign-in codes by email are for signing in.",
+            });
+          }
+          const pending = await pendingTwoFactorUser(
+            ctx as unknown as Parameters<typeof pendingTwoFactorUser>[0],
+          );
+          if (pending) {
+            const name = (await usernameOf(pool, pending)) ?? "";
+            if (path === "/two-factor/send-otp") {
+              const [enabled, account, codes] = await Promise.all([
+                email?.enabled() ?? Promise.resolve(false),
+                accountEmail(pool, pending),
+                signInCodesOn(pool, pending),
+              ]);
+              if (!enabled) {
+                throw new APIError("BAD_REQUEST", {
+                  code: "EMAIL_UNAVAILABLE",
+                  message:
+                    "Life OS cannot send email now. Use your authenticator app or a recovery code.",
+                });
+              }
+              if (!codes || !account?.verified) {
+                throw new APIError("BAD_REQUEST", {
+                  code: "EMAIL_CODES_OFF",
+                  message:
+                    "Sign-in codes by email are not on for this account. Use your authenticator app or a recovery code.",
+                });
+              }
+              const wait =
+                emailLimiter?.take(
+                  `sign-in-code:${pending}`,
+                  LIMITS.signInCode,
+                ) ?? 0;
+              if (wait > 0) {
+                throw new APIError("TOO_MANY_REQUESTS", {
+                  code: "TOO_MANY_CODES",
+                  message: `Too many codes asked for. Try again in ${Math.ceil(wait / 1000)} s.`,
+                });
+              }
+            } else {
+              const { waitMs, account } = throttle.attempt(
+                name,
+                clientAddress(headers),
+                {
+                  knownDevice: isKnownDevice(
+                    env.secret,
+                    name,
+                    ctx.getCookie(knownDeviceCookie),
+                  ),
+                },
+              );
+              if (waitMs > 0) {
+                const seconds = Math.ceil(waitMs / 1000);
+                throw new APIError("TOO_MANY_REQUESTS", {
+                  code: account
+                    ? "TOO_MANY_FAILED_SIGN_INS_FOR_ACCOUNT"
+                    : "TOO_MANY_FAILED_SIGN_INS",
+                  message: `Too many failed sign-ins. Try again in ${seconds} s.`,
+                });
+              }
+              codeChecks.set(ctx.context, name);
+            }
+          }
+        }
 
         // Proving it is still you (src/lib/auth/reauth.ts): an OAuth
         // consent outlives the session, so it needs a recent sign-in or the
@@ -757,6 +906,17 @@ export function createAuth(
             }
           }
           if (!failed) {
+            // A browser new to the account: the person's alert, before
+            // the cookie below makes it known.
+            if (
+              !isKnownDevice(env.secret, name, ctx.getCookie(knownDeviceCookie))
+            ) {
+              await alertNewDevice(
+                await userByUsername(pool, name),
+                headers,
+                "password",
+              );
+            }
             throttle.succeeded(name, address);
             // The password was right (a second factor may still follow):
             // this browser is known to the account from now on.
@@ -797,6 +957,22 @@ export function createAuth(
       twoFactor({
         issuer: "Life OS",
         backupCodeOptions: { amount: 10, length: 10 },
+        // Sign-in codes by email (P22-16): 6 digits, stored hashed, for
+        // SIGN_IN_CODE_MINUTES and SIGN_IN_CODE_ATTEMPTS tries; only to an
+        // account that turned them on (the before hook above).
+        otpOptions: {
+          period: SIGN_IN_CODE_MINUTES,
+          allowedAttempts: SIGN_IN_CODE_ATTEMPTS,
+          storeOTP: "hashed",
+          sendOTP: async ({ user, otp }, ctx) => {
+            const sent = await sendSignInCode(
+              { pool, email, publicUrl: env.publicUrl },
+              user.id,
+              otp,
+            ).catch(() => false);
+            if (!sent && ctx) codeNotSent.add(ctx.context);
+          },
+        },
       }),
       ...(fullFeatures
         ? [
@@ -832,6 +1008,112 @@ export function createAuth(
         disableSettingJwtHeader: true,
       }),
       oauthProvider(oauthOptions(env)),
+      // After two-factor's: the sign-in codes' and new devices' after
+      // hooks (P22-16).
+      {
+        id: "lifeos-account-email",
+        hooks: {
+          after: [
+            {
+              matcher: () => true,
+              handler: createAuthMiddleware(async (ctx) => {
+                const headers = ctx.headers ?? new Headers();
+                const returned = ctx.context.returned;
+                const failed = returned instanceof APIError;
+                switch (ctx.path) {
+                  case "/sign-in/username": {
+                    // Better Auth offers a code to everyone with two-factor
+                    // once sendOTP is set: only to an account that turned
+                    // codes on, with a verified address, while email works.
+                    const challenge = returned as {
+                      twoFactorRedirect?: boolean;
+                      twoFactorMethods?: string[];
+                    } | null;
+                    if (
+                      !failed &&
+                      challenge?.twoFactorRedirect &&
+                      Array.isArray(challenge.twoFactorMethods)
+                    ) {
+                      const userId = await userByUsername(
+                        pool,
+                        (ctx.body as Record<string, unknown> | undefined)
+                          ?.username,
+                      );
+                      const offer =
+                        userId !== null &&
+                        (await signInCodesOn(pool, userId)) &&
+                        (await accountEmail(pool, userId))?.verified === true &&
+                        ((await email?.enabled()) ?? false);
+                      const methods = challenge.twoFactorMethods.filter(
+                        (method) => method !== "otp" || offer,
+                      );
+                      challenge.twoFactorMethods.splice(
+                        0,
+                        challenge.twoFactorMethods.length,
+                        ...methods,
+                      );
+                    }
+                    return;
+                  }
+                  case "/two-factor/send-otp":
+                    if (!failed && codeNotSent.has(ctx.context)) {
+                      throw new APIError("SERVICE_UNAVAILABLE", {
+                        code: "EMAIL_NOT_SENT",
+                        message:
+                          "Life OS could not email the code now. Try again in a minute, or use your authenticator app or a recovery code.",
+                      });
+                    }
+                    return;
+                  case "/two-factor/verify-otp": {
+                    const name = codeChecks.get(ctx.context);
+                    if (name === undefined) return;
+                    if (!failed) {
+                      throttle.succeeded(name, clientAddress(headers));
+                    } else if ((returned as APIError).statusCode === 401) {
+                      throttle.failed(name, clientAddress(headers));
+                    }
+                    return;
+                  }
+                  case "/two-factor/disable": {
+                    // The authenticator app went; with sign-in codes by
+                    // email on, a code is still asked for.
+                    const userId = requestUser(ctx.context);
+                    if (!failed && userId)
+                      await syncTwoFactorEnabled(pool, userId);
+                    return;
+                  }
+                  case "/passkey/verify-authentication": {
+                    const userId = ctx.context.newSession?.user.id;
+                    if (failed || !userId) return;
+                    const name = (await usernameOf(pool, userId)) ?? "";
+                    if (
+                      !isKnownDevice(
+                        env.secret,
+                        name,
+                        ctx.getCookie(knownDeviceCookie),
+                      )
+                    ) {
+                      await alertNewDevice(userId, headers, "passkey");
+                      ctx.setCookie(
+                        knownDeviceCookie,
+                        knownDeviceValue(env.secret, name),
+                        {
+                          httpOnly: true,
+                          secure,
+                          sameSite: "lax",
+                          path: "/",
+                          maxAge: KNOWN_DEVICE_MAX_AGE_SECONDS,
+                        },
+                      );
+                    }
+                    return;
+                  }
+                }
+              }),
+            },
+          ],
+        },
+      } satisfies BetterAuthPlugin,
       // Last: its after hook runs after the plugins', when two-factor has
       // turned a password sign-in into a challenge (and no session).
       securityLogPlugin(pool),

@@ -18,11 +18,11 @@ func TestChannelState(t *testing.T) {
 		success, failure *time.Time
 		want             generated.ChannelState
 	}{
-		{"never used", nil, nil, generated.Idle},
-		{"only successes", &later, nil, generated.Ok},
-		{"only failures", nil, &earlier, generated.Failing},
-		{"failure after success", &earlier, &later, generated.Failing},
-		{"success after failure", &later, &earlier, generated.Ok},
+		{"never used", nil, nil, generated.ChannelStateIdle},
+		{"only successes", &later, nil, generated.ChannelStateOk},
+		{"only failures", nil, &earlier, generated.ChannelStateFailing},
+		{"failure after success", &earlier, &later, generated.ChannelStateFailing},
+		{"success after failure", &later, &earlier, generated.ChannelStateOk},
 	} {
 		if got := channelState(tc.success, tc.failure); got != tc.want {
 			t.Errorf("%s: state = %s, want %s", tc.name, got, tc.want)
